@@ -42,6 +42,12 @@ function applyState(snap: UiSnapshot): void {
   state = snap
   renderOrb(snap)
 
+  // After opening wheel/stack the cursor is usually still over the orb —
+  // re-enable hit-testing without requiring a mouse move (fixes dead clicks).
+  if (snap.mode === 'wheel' || snap.mode === 'stack') {
+    window.whatwhen.setIgnoreMouse(false)
+  }
+
   if (!modeChanged && snap.mode === 'wheel' && wheelBuilt && !profilesChanged) {
     updateWheelActive(snap)
     return
@@ -91,17 +97,21 @@ function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
   }
 }
 
+function stripNativeTips(root: ParentNode = document): void {
+  root.querySelectorAll('[title]').forEach((el) => el.removeAttribute('title'))
+}
+
 function renderOrb(snap: UiSnapshot): void {
+  // Never set title / aria-label — Windows shows a white native tooltip for those
   orb.removeAttribute('title')
+  orb.removeAttribute('aria-label')
 
   if (snap.activeSession && !snap.activeSession.endIso) {
     orb.classList.add('active')
     orbTint.style.background = snap.activeSession.profileColor
-    orb.setAttribute('aria-label', snap.activeSession.profileName)
   } else {
     orb.classList.remove('active')
     orbTint.style.background = 'transparent'
-    orb.setAttribute('aria-label', 'Open profiles')
   }
 
   const n = snap.pending.length
@@ -111,6 +121,7 @@ function renderOrb(snap: UiSnapshot): void {
   } else {
     orbBadge.hidden = true
   }
+  stripNativeTips()
 }
 
 /**
@@ -189,7 +200,6 @@ function renderWheel(snap: UiSnapshot): void {
     if (item.kind === 'stop') {
       btn.classList.add('stop')
       btn.dataset.stop = '1'
-      btn.setAttribute('aria-label', 'Stop timer')
       num.textContent = '×'
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
@@ -200,10 +210,6 @@ function renderWheel(snap: UiSnapshot): void {
       btn.dataset.slot = String(profile.slot)
       if (profile.slot === activeSlot) btn.classList.add('active-slot')
       btn.style.setProperty('--c', profile.color)
-      btn.setAttribute(
-        'aria-label',
-        `${profile.name} (${SLOT_DISPLAY[profile.slot]})`
-      )
       num.textContent = SLOT_DISPLAY[profile.slot]
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
@@ -249,9 +255,6 @@ function renderStack(pending: Session[]): void {
     dot.className = 'stack-dot'
     dot.style.setProperty('--dot-color', session.profileColor)
     dot.style.animationDelay = `${i * 40}ms`
-    const start = formatTimeLocal(session.startIso)
-    const end = session.endIso ? formatTimeLocal(session.endIso) : '…'
-    dot.setAttribute('aria-label', `${session.profileName} · ${start} – ${end}`)
     dot.addEventListener('click', (e) => {
       e.stopPropagation()
       void window.whatwhen.openBubble(session.id)
@@ -345,12 +348,21 @@ async function saveSettingsAndClose(): Promise<void> {
   await window.whatwhen.closeUi()
 }
 
-// —— Hit testing ——
+/**
+ * Expanded wheel/stack uses pass-through on empty glass. Interactive nodes
+ * temporarily disable pass-through while the cursor is over them.
+ * Idle / bubble / settings: main process owns mouse policy (no ignore games).
+ */
+function needsPassThrough(): boolean {
+  return state?.mode === 'wheel' || state?.mode === 'stack'
+}
+
 function wireHit(el: HTMLElement): void {
-  el.addEventListener('mouseenter', () => window.whatwhen.setIgnoreMouse(false))
+  el.addEventListener('mouseenter', () => {
+    if (needsPassThrough()) window.whatwhen.setIgnoreMouse(false)
+  })
   el.addEventListener('mouseleave', () => {
-    if (state && state.mode !== 'idle') return
-    window.whatwhen.setIgnoreMouse(true)
+    if (needsPassThrough()) window.whatwhen.setIgnoreMouse(true)
   })
 }
 wireHit(orb)
@@ -428,6 +440,16 @@ window.addEventListener('keydown', (e) => {
 })
 
 async function boot(): Promise<void> {
+  document.title = ''
+  stripNativeTips()
+  // Keep stripping if anything re-adds title (Chromium / a11y)
+  const mo = new MutationObserver(() => stripNativeTips())
+  mo.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['title'],
+    subtree: true
+  })
+
   const snap = await window.whatwhen.getState()
   applyState(snap)
   window.whatwhen.onStateChanged(applyState)

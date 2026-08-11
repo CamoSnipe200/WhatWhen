@@ -22,6 +22,33 @@ if (!gotLock) {
 let orbWindow: BrowserWindow | null = null
 let service: SessionService
 
+/**
+ * Idle = tiny window over the orb only → capture all mouse events (no pass-through lag).
+ * Expanded = larger transparent chrome → pass clicks through empty pixels; renderer
+ * re-enables hit-testing when the cursor is over real UI.
+ */
+function applyMousePolicy(mode: string): void {
+  if (!orbWindow || orbWindow.isDestroyed()) return
+
+  if (mode === 'idle') {
+    orbWindow.setFocusable(false)
+    // Small HWND: always receive clicks on the orb. No ignore lag after close.
+    orbWindow.setIgnoreMouseEvents(false)
+    return
+  }
+
+  if (mode === 'bubble' || mode === 'settings') {
+    orbWindow.setFocusable(true)
+    orbWindow.setIgnoreMouseEvents(false)
+    orbWindow.focus()
+    return
+  }
+
+  // wheel / stack — not keyboard-focused; pass through empty glass
+  orbWindow.setFocusable(false)
+  orbWindow.setIgnoreMouseEvents(true, { forward: true })
+}
+
 function pushState(): void {
   if (!orbWindow || orbWindow.isDestroyed()) return
   const snap = service.snapshot()
@@ -33,24 +60,27 @@ function pushState(): void {
     service.getConfig().settings.marginPx
   )
   orbWindow.webContents.send('state-changed', snap)
-
-  if (snap.mode === 'idle') {
-    orbWindow.setIgnoreMouseEvents(true, { forward: true })
-  } else {
-    orbWindow.setIgnoreMouseEvents(false)
-    if (snap.mode === 'bubble' || snap.mode === 'settings') {
-      orbWindow.focus()
-    }
-  }
+  applyMousePolicy(snap.mode)
 }
 
 function createWindow(): void {
   orbWindow = createOrbWindow()
   loadRenderer(orbWindow)
-  orbWindow.setIgnoreMouseEvents(true, { forward: true })
+  orbWindow.setIgnoreMouseEvents(false)
+  orbWindow.setTitle('')
 
   orbWindow.webContents.on('did-finish-load', () => {
+    orbWindow?.setTitle('')
+    void orbWindow?.webContents.executeJavaScript(`
+      document.title = '';
+      document.querySelectorAll('[title]').forEach((el) => el.removeAttribute('title'));
+    `)
     pushState()
+  })
+
+  orbWindow.webContents.on('page-title-updated', (e) => {
+    e.preventDefault()
+    orbWindow?.setTitle('')
   })
 
   orbWindow.on('closed', () => {
@@ -242,6 +272,12 @@ function setupIpc(): void {
 
   ipcMain.on('set-ignore-mouse', (_e, ignore: boolean) => {
     if (!orbWindow || orbWindow.isDestroyed()) return
+    const mode = service?.snapshot()?.mode ?? 'idle'
+    // Idle is a tight orb window — never pass-through (avoids the multi-second dead zone)
+    if (mode === 'idle' || mode === 'bubble' || mode === 'settings') {
+      orbWindow.setIgnoreMouseEvents(false)
+      return
+    }
     if (ignore) {
       orbWindow.setIgnoreMouseEvents(true, { forward: true })
     } else {

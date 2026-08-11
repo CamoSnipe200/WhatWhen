@@ -8,7 +8,6 @@ export const STACK_GAP = 10
 export const MAX_STACK = 7
 export const BUBBLE_W = 280
 export const BUBBLE_H = 168
-/** Room for dual-radius 6-dot fan above/left of the orb */
 export const WHEEL_W = 320
 export const WHEEL_H = 300
 export const SETTINGS_W = 320
@@ -16,7 +15,9 @@ export const SETTINGS_H = 420
 export const MARGIN = 16
 
 /**
- * Window is bottom-right anchored. Expands for wheel / stack / bubble / settings.
+ * Tight when idle (orb only). Expand only when UI is open.
+ * A large idle HWND leaves a dead transparent slab that steals clicks
+ * and can paint a white bar on Windows.
  */
 export function computeLayout(
   mode: UiMode,
@@ -34,14 +35,13 @@ export function computeLayout(
     const n = Math.min(Math.max(pendingCount, 1), MAX_STACK)
     const stackH = n * (STACK_DOT + STACK_GAP) + 12
     return {
-      width: Math.max(orbSize + 24, 72),
-      height: orbSize + stackH + 20
+      width: Math.max(orbSize + 28, 80),
+      height: orbSize + stackH + 24
     }
   }
   if (mode === 'settings') {
     return { width: SETTINGS_W + 16, height: SETTINGS_H + orbSize + 24 }
   }
-  // bubble
   return {
     width: Math.max(BUBBLE_W + 16, orbSize + 24),
     height: orbSize + BUBBLE_H + 28
@@ -49,10 +49,10 @@ export function computeLayout(
 }
 
 export function createOrbWindow(): BrowserWindow {
-  const size = ORB_SIZE + 8
+  const { width, height } = computeLayout('idle', 0)
   const win = new BrowserWindow({
-    width: size,
-    height: size,
+    width,
+    height,
     show: false,
     frame: false,
     transparent: true,
@@ -64,25 +64,37 @@ export function createOrbWindow(): BrowserWindow {
     skipTaskbar: true,
     alwaysOnTop: true,
     hasShadow: false,
-    focusable: true,
+    // Not focusable while idle/wheel — avoids Windows drawing a white focus slab
+    focusable: false,
     roundedCorners: false,
     thickFrame: false,
+    title: '',
     backgroundColor: '#00000000',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      backgroundThrottling: false
     }
   })
 
+  win.setTitle('')
   win.setAlwaysOnTop(true, 'screen-saver')
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.setHasShadow(false)
+  win.setBackgroundColor('#00000000')
+  win.setFocusable(false)
 
   win.once('ready-to-show', () => {
-    positionBottomRight(win, size, size)
+    win.setTitle('')
+    positionBottomRight(win, width, height)
     win.showInactive()
+  })
+
+  win.on('page-title-updated', (e) => {
+    e.preventDefault()
+    win.setTitle('')
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -104,6 +116,8 @@ export function positionBottomRight(
   const x = Math.round(workArea.x + workArea.width - width - margin)
   const y = Math.round(workArea.y + workArea.height - height - margin)
   win.setBounds({ x, y, width, height })
+  win.setBackgroundColor('#00000000')
+  win.setHasShadow(false)
 }
 
 export function applyLayout(
@@ -115,7 +129,7 @@ export function applyLayout(
 ): void {
   const { width, height } = computeLayout(mode, pendingCount, orbSize)
   positionBottomRight(win, width, height, margin)
-  win.setHasShadow(false)
+  win.setTitle('')
 }
 
 export function loadRenderer(win: BrowserWindow): void {
