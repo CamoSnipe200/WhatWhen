@@ -38,6 +38,8 @@
     "nsis": {
       "oneClick": true,
       "perMachine": false
-    }
+    },
+    "publish": null
   }
 }
+

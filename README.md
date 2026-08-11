@@ -24,7 +24,20 @@ npm run dev
 npm run dist
 ```
 
-Installers land in `release/`.
+Installers land in `release/` (`WhatWhen Setup x.y.z.exe` + portable).
+
+### Auto Windows builds on release
+
+Publishing a **GitHub Release** runs [`.github/workflows/release.yml`](.github/workflows/release.yml):
+
+1. Optionally bump `"version"` in `package.json` and push.
+2. GitHub → **Releases** → **Draft a new release**.
+3. Create a tag like `v1.0.1`, write notes, **Publish release**.
+4. CI builds on `windows-latest` and **uploads the `.exe` files onto that release**.
+
+You can also run the workflow manually under **Actions → Release** (downloads as workflow artifacts; only a published release gets assets attached).
+
+> Builds are **unsigned**. Windows SmartScreen may warn until you add code signing later.
 
 ## Hotkeys
 
