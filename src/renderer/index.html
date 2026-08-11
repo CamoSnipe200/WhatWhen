@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title></title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="stage">
+        <div id="wheel" class="wheel" hidden></div>
+        <div id="stack" class="stack" hidden></div>
+
+        <div id="bubble" class="bubble" hidden>
+          <div class="bubble-inner">
+            <div class="bubble-header">
+              <span id="bubble-swatch" class="swatch"></span>
+              <div class="bubble-meta">
+                <div id="bubble-title" class="bubble-title"></div>
+                <div id="bubble-range" class="bubble-range"></div>
+              </div>
+            </div>
+            <textarea
+              id="bubble-input"
+              class="bubble-input"
+              rows="3"
+              maxlength="500"
+              placeholder="What did you do?"
+              spellcheck="true"
+            ></textarea>
+            <div class="bubble-hint">Enter or leave to save</div>
+          </div>
+          <div class="bubble-tail"></div>
+        </div>
+
+        <div id="settings" class="settings" hidden>
+          <div class="settings-inner">
+            <div id="settings-list" class="settings-list"></div>
+            <div class="settings-actions">
+              <button type="button" id="settings-done" class="btn-primary">Done</button>
+            </div>
+          </div>
+        </div>
+
+        <button id="orb" class="orb" type="button" aria-label="Profiles">
+          <span class="orb-glass"></span>
+          <span class="orb-tint" id="orb-tint"></span>
+          <span class="orb-ring"></span>
+          <span class="orb-badge" id="orb-badge" hidden></span>
+        </button>
+      </div>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
