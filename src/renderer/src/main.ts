@@ -106,9 +106,14 @@ function applyState(snap: UiSnapshot): void {
   renderOrb(snap)
   updateLiveTimer(snap)
 
-  // After toggling idle/wheel/stack the cursor is usually still over the orb —
+  // After toggling wheel/stack the cursor is usually still over the orb —
   // re-enable hit-testing without requiring a mouse move (fixes dead clicks).
-  if (snap.mode === 'idle' || snap.mode === 'wheel' || snap.mode === 'stack') {
+  // Only on mode change — elapsed ticks must not disable pass-through over
+  // empty wheel/stack glass (that steals scroll from apps underneath).
+  if (
+    modeChanged &&
+    (snap.mode === 'idle' || snap.mode === 'wheel' || snap.mode === 'stack')
+  ) {
     window.whatwhen.setIgnoreMouse(false)
   }
 
@@ -170,13 +175,19 @@ function applyState(snap: UiSnapshot): void {
 
 function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
   if (nextMode !== 'wheel') {
-    wheelEl.hidden = true
-    wheelEl.innerHTML = ''
-    wheelBuilt = false
+    fadeOutChrome(wheelEl, () => {
+      wheelEl.innerHTML = ''
+      wheelBuilt = false
+    })
+  } else {
+    wheelEl.classList.remove('is-leaving')
   }
   if (nextMode !== 'stack') {
-    stackEl.hidden = true
-    stackEl.innerHTML = ''
+    fadeOutChrome(stackEl, () => {
+      stackEl.innerHTML = ''
+    })
+  } else {
+    stackEl.classList.remove('is-leaving')
   }
   if (nextMode !== 'bubble') {
     bubbleEl.hidden = true
@@ -199,6 +210,20 @@ function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
 
   // Keep the orb available while centered Analysis / Timeline overlays are open.
   orb.hidden = false
+}
+
+/** Fade wheel/stack out so the orb can stay visible while the HWND shrinks. */
+function fadeOutChrome(el: HTMLElement, after: () => void): void {
+  if (el.hidden) {
+    after()
+    return
+  }
+  el.classList.add('is-leaving')
+  window.setTimeout(() => {
+    el.hidden = true
+    el.classList.remove('is-leaving')
+    after()
+  }, 120)
 }
 
 function stripNativeTips(root: ParentNode = document): void {
@@ -690,13 +715,13 @@ function renderTimeline(sessions: Session[]): void {
 }
 
 /**
- * Idle/wheel/stack use a large transparent HWND with pass-through on empty
- * glass. Interactive nodes temporarily disable pass-through while hovered.
- * Bubble / settings / overlays: main process owns mouse policy.
+ * Wheel/stack use a larger transparent HWND with pass-through on empty glass.
+ * Idle is orb-tight (no empty surface). Bubble / settings / overlays: main
+ * process owns mouse policy.
  */
 function needsPassThrough(): boolean {
   const mode = state?.mode
-  return mode === 'idle' || mode === 'wheel' || mode === 'stack'
+  return mode === 'wheel' || mode === 'stack'
 }
 
 function wireHit(el: HTMLElement): void {
@@ -793,10 +818,16 @@ timelineClose.addEventListener('click', () => {
   void window.whatwhen.closeUi()
 })
 
+/** Release Chromium focus before main demotes the transparent HWND. */
+function blurBubbleInput(): void {
+  bubbleInput.blur()
+}
+
 /** Enter: save, including an intentional blank. */
 async function leaveBubbleSaving(): Promise<void> {
   const text = bubbleInput.value
   const id = editingId
+  blurBubbleInput()
   if (id) {
     await window.whatwhen.saveNotes(id, text)
   } else {
@@ -809,6 +840,7 @@ async function leaveBubbleFromOrb(): Promise<void> {
   if (bubbleInput.value.trim()) {
     await leaveBubbleSaving()
   } else {
+    blurBubbleInput()
     await window.whatwhen.closeUi()
   }
 }
@@ -824,6 +856,7 @@ async function leaveBubbleEscape(): Promise<void> {
   if (text.trim()) {
     await leaveBubbleSaving()
   } else {
+    blurBubbleInput()
     await window.whatwhen.bubbleEscape()
   }
 }

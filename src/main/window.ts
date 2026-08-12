@@ -22,33 +22,36 @@ export interface OrbAnchor {
 }
 
 /**
- * Idle, wheel, pending stack, and note bubble share stable minimum HWND
- * bounds. Resizing a bottom-right-anchored transparent window on Windows
- * briefly applies the new (x,y) with the old renderer viewport, which flashes
- * the previous UI up/left of the orb. Keep bounds stable across those common
- * transitions and toggle content + mouse pass-through instead.
+ * Size the HWND to the active UI. Idle is orb-tight so empty glass cannot
+ * steal scroll from apps underneath. Wheel / stack / bubble / settings /
+ * overlays use their own sizes.
  *
- * Large pending stacks may increase only the shared stack/bubble height.
- * Settings and centered overlays still use their own sizes.
+ * Resizing a bottom-right-anchored transparent window on Windows can flash
+ * the previous surface at the new origin — `pushState()` must hide before
+ * any bounds change (see WINDOW_FLICKER.md).
+ *
+ * Stack and note bubble share one footprint so opening a pending note does
+ * not resize mid-interaction.
  */
 export function computeLayout(
   mode: UiMode,
   pendingCount: number,
   orbSize = ORB_SIZE
 ): { width: number; height: number } {
-  if (mode === 'idle' || mode === 'wheel') {
+  if (mode === 'idle') {
+    // Orb + pending badge overhang (badge sits slightly above the circle).
+    const pad = 12
+    return { width: orbSize + pad, height: orbSize + pad }
+  }
+  if (mode === 'wheel') {
     return { width: WHEEL_W, height: WHEEL_H }
   }
   if (mode === 'stack' || mode === 'bubble') {
     const n = Math.min(Math.max(pendingCount, 1), MAX_STACK)
     const stackH = n * (STACK_DOT + STACK_GAP) + 12
     return {
-      width: Math.max(WHEEL_W, BUBBLE_W + 16, orbSize + 28),
-      height: Math.max(
-        WHEEL_H,
-        orbSize + stackH + 24,
-        orbSize + BUBBLE_H + 28
-      )
+      width: Math.max(BUBBLE_W + 16, orbSize + 28),
+      height: Math.max(orbSize + stackH + 24, orbSize + BUBBLE_H + 28)
     }
   }
   if (mode === 'settings') {
@@ -153,6 +156,40 @@ export function createOrbWindow(): BrowserWindow {
   return win
 }
 
+/** Full screen bounds for a mode (anchored bottom-right, or centered overlays). */
+export function computeWindowBounds(
+  mode: UiMode,
+  pendingCount: number,
+  orbSize = ORB_SIZE,
+  margin = MARGIN,
+  anchor: OrbAnchor | null = null
+): { x: number; y: number; width: number; height: number } {
+  const { width, height } = computeLayout(mode, pendingCount, orbSize)
+
+  if (mode === 'analysis' || mode === 'timeline') {
+    const { workArea } = screen.getPrimaryDisplay()
+    return {
+      x: Math.round(workArea.x + (workArea.width - width) / 2),
+      y: Math.round(workArea.y + (workArea.height - height) / 2),
+      width,
+      height
+    }
+  }
+
+  const resolved = clampAnchor(
+    anchor ?? defaultAnchor(margin),
+    width,
+    height,
+    margin
+  )
+  return {
+    x: resolved.x - width,
+    y: resolved.y - height,
+    width,
+    height
+  }
+}
+
 /**
  * Place window so its bottom-right corner sits on the orb anchor.
  * Analysis / timeline overlays are centered on the display instead.
@@ -165,24 +202,13 @@ export function applyLayout(
   margin = MARGIN,
   anchor: OrbAnchor | null = null
 ): void {
-  const { width, height } = computeLayout(mode, pendingCount, orbSize)
-  let x: number
-  let y: number
-
-  if (mode === 'analysis' || mode === 'timeline') {
-    const { workArea } = screen.getPrimaryDisplay()
-    x = Math.round(workArea.x + (workArea.width - width) / 2)
-    y = Math.round(workArea.y + (workArea.height - height) / 2)
-  } else {
-    const resolved = clampAnchor(
-      anchor ?? defaultAnchor(margin),
-      width,
-      height,
-      margin
-    )
-    x = resolved.x - width
-    y = resolved.y - height
-  }
+  const { x, y, width, height } = computeWindowBounds(
+    mode,
+    pendingCount,
+    orbSize,
+    margin,
+    anchor
+  )
 
   const cur = win.getBounds()
   if (

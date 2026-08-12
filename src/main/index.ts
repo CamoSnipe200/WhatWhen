@@ -12,6 +12,7 @@ import { SessionService } from './session-service'
 import { registerShortcutsWithRetry, unregisterShortcuts } from './shortcuts'
 import {
   applyLayout,
+  computeWindowBounds,
   createOrbWindow,
   defaultAnchor,
   loadRenderer,
@@ -26,6 +27,7 @@ import {
   type ProfileSlot
 } from '../shared/types'
 import { listPending } from './store'
+import { checkForUpdates } from './updates'
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
@@ -67,10 +69,30 @@ function setOverlayEscape(enabled: boolean): void {
 }
 
 /**
- * Idle/wheel/stack share a large transparent HWND (idle≈wheel size to avoid
- * resize flicker). Empty glass uses pass-through; the renderer re-enables
- * hit-testing when the cursor is over the orb or other interactive UI.
- * Focused overlays (bubble/settings/analysis/timeline) capture all clicks.
+ * Drop Windows' white DWM focus strip on transparent frameless HWNDs.
+ * Must not call showInactive while the window is hidden — that would undo
+ * pushState()'s hide-before-resize guard for Analysis/Timeline transitions.
+ */
+function clearTransparentFocus(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  win.setFocusable(false)
+  try {
+    win.blur()
+  } catch {
+    /* blur can throw on some Electron/Windows builds */
+  }
+  win.setHasShadow(false)
+  win.setBackgroundColor('#00000000')
+  if (!win.isVisible()) return
+  win.showInactive()
+}
+
+/**
+ * Idle is an orb-tight HWND (no empty glass). Wheel/stack keep a larger
+ * transparent surface with pass-through on empty glass; the renderer
+ * re-enables hit-testing when the cursor is over interactive UI.
+ * Focused overlays (bubble/settings) capture all clicks; analysis/timeline
+ * capture clicks but stay non-focusable.
  */
 function applyMousePolicy(mode: string): void {
   if (!orbWindow || orbWindow.isDestroyed()) return
@@ -87,15 +109,23 @@ function applyMousePolicy(mode: string): void {
     // Focused transparent HWNDs can acquire a persistent white DWM strip.
     // Overlay buttons/hover still work without activating the window.
     setOverlayEscape(true)
-    orbWindow.setFocusable(false)
     orbWindow.setIgnoreMouseEvents(false)
+    clearTransparentFocus(orbWindow)
     return
   }
 
-  // idle / wheel / stack — not keyboard-focused; pass through empty glass
+  if (mode === 'idle') {
+    // Whole window is the orb — always receive input; no pass-through surface.
+    setOverlayEscape(false)
+    orbWindow.setIgnoreMouseEvents(false)
+    clearTransparentFocus(orbWindow)
+    return
+  }
+
+  // wheel / stack — large transparent HWND; pass through empty glass
   setOverlayEscape(false)
-  orbWindow.setFocusable(false)
   orbWindow.setIgnoreMouseEvents(true, { forward: true })
+  clearTransparentFocus(orbWindow)
 }
 
 function clearRevealTimers(): void {
@@ -105,9 +135,10 @@ function clearRevealTimers(): void {
   opacityFadeTimer = null
 }
 
-function fadeInWindow(win: BrowserWindow, durationMs = 180): void {
+function fadeInWindow(win: BrowserWindow, durationMs = 100): void {
   const startedAt = Date.now()
   win.setOpacity(0)
+  clearTransparentFocus(win)
   win.showInactive()
 
   opacityFadeTimer = setInterval(() => {
@@ -120,8 +151,23 @@ function fadeInWindow(win: BrowserWindow, durationMs = 180): void {
     if (progress >= 1) {
       if (opacityFadeTimer) clearInterval(opacityFadeTimer)
       opacityFadeTimer = null
+      win.setOpacity(1)
+      // Reaffirm inactive after the fade — clicks that closed the overlay
+      // can leave a stuck DWM focus strip once opacity returns to 1.
+      clearTransparentFocus(win)
     }
   }, 16)
+}
+
+/** Modes that keep the orb pinned to the HWND bottom-right. */
+function isAnchoredMode(mode: string | null): boolean {
+  return (
+    mode === 'idle' ||
+    mode === 'wheel' ||
+    mode === 'stack' ||
+    mode === 'bubble' ||
+    mode === 'settings'
+  )
 }
 
 function pushState(): void {
@@ -133,15 +179,67 @@ function pushState(): void {
   const modeChanged = lastMode !== snap.mode
   const wasCentered = lastMode === 'analysis' || lastMode === 'timeline'
   const isCentered = snap.mode === 'analysis' || snap.mode === 'timeline'
-  const crossingCenteredBoundary = lastMode !== null && wasCentered !== isCentered
   const leavingCenteredOverlay = wasCentered && !isCentered
 
+  const nextBounds = computeWindowBounds(
+    snap.mode,
+    snap.pending.length,
+    orbSize,
+    margin,
+    anchor
+  )
+  const cur = orbWindow.getBounds()
+  const boundsChanging =
+    cur.x !== nextBounds.x ||
+    cur.y !== nextBounds.y ||
+    cur.width !== nextBounds.width ||
+    cur.height !== nextBounds.height
+
   /*
-   * Centered overlays and the anchored orb cannot share stable bounds in one
-   * BrowserWindow. Hide the HWND before moving/resizing it so Windows never
-   * exposes the previous overlay at the new bottom-right origin.
+   * Shrinking anchored UI (wheel/stack → idle): keep the HWND visible and
+   * sized large for ~120ms so the orb stays put while chrome fades out in
+   * the renderer, then crop bounds without hide(). A full hide() blanks the
+   * orb for several frames (see recording 2026-08-12 090204).
    */
-  if (crossingCenteredBoundary) {
+  const anchoredShrink =
+    lastMode !== null &&
+    boundsChanging &&
+    isAnchoredMode(lastMode) &&
+    isAnchoredMode(snap.mode) &&
+    nextBounds.width * nextBounds.height < cur.width * cur.height
+
+  if (anchoredShrink) {
+    clearRevealTimers()
+    // Pass through empty glass while the large surface is still up.
+    orbWindow.setIgnoreMouseEvents(true, { forward: true })
+    setOverlayEscape(false)
+    orbWindow.webContents.send('state-changed', snap)
+    lastMode = snap.mode
+    const targetWindow = orbWindow
+    boundsRevealTimer = setTimeout(() => {
+      boundsRevealTimer = null
+      if (targetWindow.isDestroyed()) return
+      applyLayout(
+        targetWindow,
+        snap.mode,
+        snap.pending.length,
+        orbSize,
+        margin,
+        anchor
+      )
+      applyMousePolicy(snap.mode)
+      clearTransparentFocus(targetWindow)
+    }, 120)
+    return
+  }
+
+  /*
+   * Growing or crossing centered overlays: hide before setBounds so Windows
+   * never flashes the previous surface at the new origin. Reveal with a short
+   * fade so the orb returns softly (open path cannot keep the orb on-screen
+   * in a single HWND — that would need a second window).
+   */
+  if (lastMode !== null && boundsChanging) {
     clearRevealTimers()
     orbWindow.setOpacity(1)
     orbWindow.hide()
@@ -162,22 +260,16 @@ function pushState(): void {
     applyMousePolicy(snap.mode)
   }
   orbWindow.webContents.send('state-changed', snap)
+  const shouldReveal = lastMode !== null && boundsChanging
   lastMode = snap.mode
 
-  if (crossingCenteredBoundary) {
+  if (shouldReveal) {
     const targetWindow = orbWindow
-    // Closing review overlays intentionally leaves a clean pause before the
-    // anchored orb fades back in. Opening uses only a short paint-settle delay.
-    const delayMs = leavingCenteredOverlay ? 500 : 80
+    const delayMs = leavingCenteredOverlay ? 500 : 50
     boundsRevealTimer = setTimeout(() => {
       boundsRevealTimer = null
       if (targetWindow.isDestroyed()) return
-      if (leavingCenteredOverlay) {
-        fadeInWindow(targetWindow)
-      } else {
-        targetWindow.setOpacity(1)
-        targetWindow.showInactive()
-      }
+      fadeInWindow(targetWindow, leavingCenteredOverlay ? 180 : 100)
     }, delayMs)
   }
 }
@@ -382,6 +474,7 @@ function setupIpc(): void {
     const restoreFocus = (): void => {
       contextMenuOpen = false
       if (!orbWindow || orbWindow.isDestroyed()) return
+      // Menu required focus; demote even when the UI mode did not change.
       applyMousePolicy(service.snapshot().mode)
     }
 
@@ -465,6 +558,15 @@ function setupIpc(): void {
           )
         }
       },
+      {
+        label: `Check for updates… (v${app.getVersion()})`,
+        click: () => {
+          void checkForUpdates(orbWindow).finally(() => {
+            if (!orbWindow || orbWindow.isDestroyed()) return
+            applyMousePolicy(service.snapshot().mode)
+          })
+        }
+      },
       { type: 'separator' },
       {
         label: 'Quit WhatWhen',
@@ -481,8 +583,9 @@ function setupIpc(): void {
   ipcMain.on('set-ignore-mouse', (_e, ignore: boolean) => {
     if (!orbWindow || orbWindow.isDestroyed()) return
     const mode = service?.snapshot()?.mode ?? 'idle'
-    // Focused overlays — never pass-through
+    // Idle is orb-tight; focused overlays never pass through.
     if (
+      mode === 'idle' ||
       mode === 'bubble' ||
       mode === 'settings' ||
       mode === 'analysis' ||
@@ -491,7 +594,7 @@ function setupIpc(): void {
       orbWindow.setIgnoreMouseEvents(false)
       return
     }
-    // idle / wheel / stack — large transparent HWND; pass through empty glass
+    // wheel / stack — large transparent HWND; pass through empty glass
     if (ignore) {
       orbWindow.setIgnoreMouseEvents(true, { forward: true })
     } else {

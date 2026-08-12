@@ -28,31 +28,27 @@ problem, not incorrect CSS coordinates.
 
 ## Required safeguards
 
-### Keep common modes on stable bounds
+### Size each mode to its UI
 
-Idle, radial wheel, pending stack, and note bubble should share the same
-minimum bounds. Large pending stacks may increase the shared stack/bubble
-height, but opening an individual pending note must not resize the window.
+Idle uses an orb-tight HWND so empty glass cannot steal scroll from apps
+underneath. Wheel, stack/bubble, settings, and centered overlays each use
+their own bounds. Stack and note bubble still share one footprint so opening
+a pending note does not resize mid-interaction.
 
-This invariant lives in `src/main/window.ts`.
+### Hide before grow / centered moves; fade-shrink on close
 
-### Hide before crossing centered/anchored layouts
+Resizing a transparent HWND while visible can flash the previous Chromium
+surface at the new origin.
 
-Analysis and Timeline are centered; the orb modes are anchored. One window
-cannot occupy both positions, so `pushState()` must:
+**Growing** (idle → wheel) or crossing Analysis/Timeline: hide first, apply
+bounds, send state, then reveal with a short opacity fade (~100 ms). The orb
+briefly disappears on open — keeping it painted across a grow in one HWND is
+not possible without a second window.
 
-1. Hide the window.
-2. Apply the new bounds atomically with one `setBounds()` call.
-3. Apply focus/mouse policy.
-4. Send renderer state.
-5. When closing Analysis/Timeline, keep the window hidden for 500 ms so the
-   old centered surface is fully gone, then show the anchored window at zero
-   opacity and fade it in.
-
-Do not move or resize the visible window during this transition. The deliberate
-half-second pause is a UX boundary: the overlay disappears immediately, then
-the orb returns as a separate fade rather than exposing stale compositor
-frames. Opening a review overlay uses only a short hidden settle delay.
+**Shrinking** (wheel/stack → idle): do **not** hide. Send the idle state first
+so the renderer can fade out wheel/stack chrome (~120 ms) while the orb stays
+on the still-large HWND, then crop bounds without `hide()`. That removes the
+multi-frame blank orb seen when close used a full hide.
 
 ### Route every state change through `pushState()`
 
@@ -75,6 +71,13 @@ Mouse clicks and hover still work; a temporary global Escape accelerator
 preserves keyboard dismissal while either review overlay is visible. Only
 note/settings modes, which require keyboard entry, should make the window
 focusable.
+
+After any focusable episode (note bubble, settings, or the native context
+menu), call `clearTransparentFocus()`: `setFocusable(false)`, `blur()`,
+reset shadow/background, and `showInactive()` **only if the window is still
+visible**. Never `showInactive()` while `pushState()` has the window hidden
+for a centered/anchored transition — that would undo the hide-before-resize
+guard. Reaffirm inactive state at the end of the Analysis/Timeline close fade.
 
 ### Do not transform persistent glass controls
 

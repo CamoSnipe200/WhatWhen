@@ -199,6 +199,14 @@ body {
   display: none !important;
 }
 
+.wheel.is-leaving {
+  pointer-events: none;
+}
+
+.wheel.is-leaving .wheel-dot {
+  animation: wheel-out 0.12s ease forwards;
+}
+
 .wheel-dot {
   position: absolute;
   width: 38px;
@@ -305,6 +313,13 @@ body {
   }
 }
 
+@keyframes wheel-out {
+  to {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+}
+
 /* —— Pending stack —— */
 .stack {
   position: absolute;
@@ -321,6 +336,12 @@ body {
 
 .stack[hidden] {
   display: none !important;
+}
+
+.stack.is-leaving {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
 }
 
 .stack-dot {

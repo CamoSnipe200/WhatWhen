@@ -1,6 +1,6 @@
 {
   "name": "whatwhen",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Workday profile timer — remember what you did when",
   "main": "./out/main/index.js",
   "author": "WhatWhen",
