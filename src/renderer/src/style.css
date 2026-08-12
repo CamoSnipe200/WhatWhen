@@ -757,21 +757,25 @@ body {
 .timeline-scroll {
   flex: 1;
   min-height: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 8px 4px 4px;
+  overflow: hidden;
+  padding: 8px 0 4px;
 }
 
 .timeline-track {
   position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  width: calc(100% - 32px);
   height: 245px;
-  min-width: 100%;
+  min-width: 0;
+  margin: 0 16px;
 }
 
 .timeline-rail {
   position: absolute;
-  left: 12px;
-  right: 12px;
+  left: 0;
+  right: 0;
   top: 36px;
   height: 2px;
   background: rgba(255, 255, 255, 0.22);
@@ -779,9 +783,10 @@ body {
 }
 
 .timeline-bubble {
-  position: absolute;
+  position: relative;
   top: 20px;
   height: 215px;
+  min-width: 2px;
   border: none;
   background: transparent;
   padding: 0;
@@ -825,8 +830,9 @@ body {
   line-height: 1;
   white-space: nowrap;
   text-overflow: ellipsis;
-  transform: rotate(90deg);
-  transform-origin: top left;
+  /* Counter-clockwise so text reads upward from the rail */
+  transform: translateX(-50%) rotate(-90deg);
+  transform-origin: center top;
   pointer-events: none;
 }
 

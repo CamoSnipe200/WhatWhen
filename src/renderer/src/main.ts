@@ -632,37 +632,24 @@ function renderTimeline(sessions: Session[]): void {
   }
 
   const now = Date.now()
-  const pxPerMs = 100 / (60 * 60 * 1000)
-  const minSegmentWidth = 64
-  const segmentGap = 10
-  let cursor = 24
-  let previousEnd = new Date(sessions[0].startIso).getTime()
-
   const items = sessions.map((session) => {
     const start = new Date(session.startIso).getTime()
     const end = session.endIso ? new Date(session.endIso).getTime() : now
-    const untrackedGap = Math.max(0, start - previousEnd)
-    cursor += Math.min(100, untrackedGap * pxPerMs)
-    const width = Math.max(minSegmentWidth, (end - start) * pxPerMs)
-    const left = cursor
-    cursor += width + segmentGap
-    previousEnd = Math.max(previousEnd, end)
-    return { session, left, width }
+    return { session, durationMs: Math.max(1, end - start) }
   })
-
-  const trackW = Math.max(640, cursor + 24)
-  timelineTrack.style.width = `${trackW}px`
 
   const rail = document.createElement('div')
   rail.className = 'timeline-rail'
   timelineTrack.appendChild(rail)
 
-  items.forEach(({ session, left, width }, i) => {
+  items.forEach(({ session, durationMs }, i) => {
     const bubble = document.createElement('button')
     bubble.type = 'button'
     bubble.className = 'timeline-bubble'
-    bubble.style.left = `${left}px`
-    bubble.style.width = `${width}px`
+    // Flex distributes the complete track among recorded sessions. The
+    // remaining width after small visual gaps is exactly duration-proportional.
+    bubble.style.flexGrow = String(durationMs)
+    bubble.style.flexBasis = '0'
     bubble.style.setProperty('--c', session.profileColor)
     bubble.style.animationDelay = `${i * 30}ms`
 
@@ -671,6 +658,7 @@ function renderTimeline(sessions: Session[]): void {
 
     const label = document.createElement('span')
     label.className = 'timeline-label'
+    label.style.top = `${48 + (i % 3) * 52}px`
     label.textContent = `${formatTimeLocal(session.startIso)} · ${session.profileName}`
     bubble.append(bar, label)
 
@@ -776,7 +764,7 @@ orb.addEventListener('click', (e) => {
     return
   }
   if (state?.mode === 'bubble') {
-    void leaveBubbleSaving()
+    void leaveBubbleFromOrb()
     return
   }
   void window.whatwhen.toggleWheel()
@@ -805,7 +793,7 @@ timelineClose.addEventListener('click', () => {
   void window.whatwhen.closeUi()
 })
 
-/** Enter / orb click: save (empty clears pending as intentional blank). */
+/** Enter: save, including an intentional blank. */
 async function leaveBubbleSaving(): Promise<void> {
   const text = bubbleInput.value
   const id = editingId
@@ -813,6 +801,15 @@ async function leaveBubbleSaving(): Promise<void> {
     await window.whatwhen.saveNotes(id, text)
   } else {
     await window.whatwhen.dismissBubble(text)
+  }
+}
+
+/** Orb click: save typed text; an empty prompt closes but stays pending. */
+async function leaveBubbleFromOrb(): Promise<void> {
+  if (bubbleInput.value.trim()) {
+    await leaveBubbleSaving()
+  } else {
+    await window.whatwhen.closeUi()
   }
 }
 

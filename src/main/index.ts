@@ -1,4 +1,12 @@
-import { app, BrowserWindow, ipcMain, Menu, shell, screen } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  globalShortcut,
+  ipcMain,
+  Menu,
+  shell,
+  screen
+} from 'electron'
 import { existsSync } from 'fs'
 import { SessionService } from './session-service'
 import { registerShortcutsWithRetry, unregisterShortcuts } from './shortcuts'
@@ -12,7 +20,11 @@ import {
   type OrbAnchor
 } from './window'
 import { getDayMarkdownPath, getDefaultLogDir } from './paths'
-import { localDateKey, type Profile, type ProfileSlot } from '../shared/types'
+import {
+  localDateKey,
+  type Profile,
+  type ProfileSlot
+} from '../shared/types'
 import { listPending } from './store'
 
 const gotLock = app.requestSingleInstanceLock()
@@ -27,6 +39,8 @@ let service: SessionService
 let lastMode: string | null = null
 let contextMenuOpen = false
 let boundsRevealTimer: ReturnType<typeof setTimeout> | null = null
+let opacityFadeTimer: ReturnType<typeof setInterval> | null = null
+let overlayEscapeRegistered = false
 
 function getAnchor(): OrbAnchor {
   const s = service.getConfig().settings
@@ -34,6 +48,22 @@ function getAnchor(): OrbAnchor {
     return { x: s.orbAnchorX, y: s.orbAnchorY }
   }
   return defaultAnchor(s.marginPx ?? 20)
+}
+
+function setOverlayEscape(enabled: boolean): void {
+  if (enabled === overlayEscapeRegistered) return
+
+  if (enabled) {
+    overlayEscapeRegistered = globalShortcut.register('Escape', () => {
+      service.closeUi()
+    })
+    if (!overlayEscapeRegistered) {
+      console.warn('Unable to register Escape while review overlay is open')
+    }
+  } else {
+    globalShortcut.unregister('Escape')
+    overlayEscapeRegistered = false
+  }
 }
 
 /**
@@ -45,21 +75,53 @@ function getAnchor(): OrbAnchor {
 function applyMousePolicy(mode: string): void {
   if (!orbWindow || orbWindow.isDestroyed()) return
 
-  if (
-    mode === 'bubble' ||
-    mode === 'settings' ||
-    mode === 'analysis' ||
-    mode === 'timeline'
-  ) {
+  if (mode === 'bubble' || mode === 'settings') {
+    setOverlayEscape(false)
     orbWindow.setFocusable(true)
     orbWindow.setIgnoreMouseEvents(false)
     orbWindow.focus()
     return
   }
 
+  if (mode === 'analysis' || mode === 'timeline') {
+    // Focused transparent HWNDs can acquire a persistent white DWM strip.
+    // Overlay buttons/hover still work without activating the window.
+    setOverlayEscape(true)
+    orbWindow.setFocusable(false)
+    orbWindow.setIgnoreMouseEvents(false)
+    return
+  }
+
   // idle / wheel / stack — not keyboard-focused; pass through empty glass
+  setOverlayEscape(false)
   orbWindow.setFocusable(false)
   orbWindow.setIgnoreMouseEvents(true, { forward: true })
+}
+
+function clearRevealTimers(): void {
+  if (boundsRevealTimer) clearTimeout(boundsRevealTimer)
+  if (opacityFadeTimer) clearInterval(opacityFadeTimer)
+  boundsRevealTimer = null
+  opacityFadeTimer = null
+}
+
+function fadeInWindow(win: BrowserWindow, durationMs = 180): void {
+  const startedAt = Date.now()
+  win.setOpacity(0)
+  win.showInactive()
+
+  opacityFadeTimer = setInterval(() => {
+    if (win.isDestroyed()) {
+      clearRevealTimers()
+      return
+    }
+    const progress = Math.min(1, (Date.now() - startedAt) / durationMs)
+    win.setOpacity(progress)
+    if (progress >= 1) {
+      if (opacityFadeTimer) clearInterval(opacityFadeTimer)
+      opacityFadeTimer = null
+    }
+  }, 16)
 }
 
 function pushState(): void {
@@ -72,6 +134,7 @@ function pushState(): void {
   const wasCentered = lastMode === 'analysis' || lastMode === 'timeline'
   const isCentered = snap.mode === 'analysis' || snap.mode === 'timeline'
   const crossingCenteredBoundary = lastMode !== null && wasCentered !== isCentered
+  const leavingCenteredOverlay = wasCentered && !isCentered
 
   /*
    * Centered overlays and the anchored orb cannot share stable bounds in one
@@ -79,7 +142,8 @@ function pushState(): void {
    * exposes the previous overlay at the new bottom-right origin.
    */
   if (crossingCenteredBoundary) {
-    if (boundsRevealTimer) clearTimeout(boundsRevealTimer)
+    clearRevealTimers()
+    orbWindow.setOpacity(1)
     orbWindow.hide()
   }
 
@@ -102,18 +166,19 @@ function pushState(): void {
 
   if (crossingCenteredBoundary) {
     const targetWindow = orbWindow
-    const showFocused = isCentered
+    // Closing review overlays intentionally leaves a clean pause before the
+    // anchored orb fades back in. Opening uses only a short paint-settle delay.
+    const delayMs = leavingCenteredOverlay ? 500 : 80
     boundsRevealTimer = setTimeout(() => {
-      if (!targetWindow.isDestroyed()) {
-        if (showFocused) {
-          targetWindow.show()
-          targetWindow.focus()
-        } else {
-          targetWindow.showInactive()
-        }
-      }
       boundsRevealTimer = null
-    }, 50)
+      if (targetWindow.isDestroyed()) return
+      if (leavingCenteredOverlay) {
+        fadeInWindow(targetWindow)
+      } else {
+        targetWindow.setOpacity(1)
+        targetWindow.showInactive()
+      }
+    }, delayMs)
   }
 }
 
@@ -433,6 +498,7 @@ function setupIpc(): void {
       orbWindow.setIgnoreMouseEvents(false)
     }
   })
+
 }
 
 app.on('second-instance', () => {
@@ -461,9 +527,10 @@ app.whenReady().then(async () => {
   pushState()
 
   service.onChange(() => {
-    if (orbWindow && !orbWindow.isDestroyed()) {
-      orbWindow.webContents.send('state-changed', service.snapshot())
-    }
+    // Always apply native bounds/visibility before renderer state. Sending the
+    // snapshot directly here lets Windows paint the old transparent contents
+    // at the new origin for a frame during centered-overlay transitions.
+    pushState()
   })
 
   screen.on('display-metrics-changed', () => pushState())

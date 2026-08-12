@@ -54,7 +54,16 @@ export function computeLayout(
   if (mode === 'settings') {
     return { width: SETTINGS_W + 16, height: SETTINGS_H + orbSize + 24 }
   }
-  if (mode === 'analysis' || mode === 'timeline') {
+  if (mode === 'timeline') {
+    // Nearly full work-area width; modest side margins (not huge gutters)
+    const { workArea } = screen.getPrimaryDisplay()
+    const marginX = 56
+    return {
+      width: Math.max(720, workArea.width - marginX * 2),
+      height: OVERLAY_H
+    }
+  }
+  if (mode === 'analysis') {
     return { width: OVERLAY_W, height: OVERLAY_H }
   }
   return { width: WHEEL_W, height: WHEEL_H }
