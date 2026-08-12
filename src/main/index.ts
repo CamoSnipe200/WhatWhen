@@ -26,6 +26,7 @@ let orbWindow: BrowserWindow | null = null
 let service: SessionService
 let lastMode: string | null = null
 let contextMenuOpen = false
+let boundsRevealTimer: ReturnType<typeof setTimeout> | null = null
 
 function getAnchor(): OrbAnchor {
   const s = service.getConfig().settings
@@ -68,6 +69,19 @@ function pushState(): void {
   const margin = service.getConfig().settings.marginPx
   const anchor = getAnchor()
   const modeChanged = lastMode !== snap.mode
+  const wasCentered = lastMode === 'analysis' || lastMode === 'timeline'
+  const isCentered = snap.mode === 'analysis' || snap.mode === 'timeline'
+  const crossingCenteredBoundary = lastMode !== null && wasCentered !== isCentered
+
+  /*
+   * Centered overlays and the anchored orb cannot share stable bounds in one
+   * BrowserWindow. Hide the HWND before moving/resizing it so Windows never
+   * exposes the previous overlay at the new bottom-right origin.
+   */
+  if (crossingCenteredBoundary) {
+    if (boundsRevealTimer) clearTimeout(boundsRevealTimer)
+    orbWindow.hide()
+  }
 
   applyLayout(
     orbWindow,
@@ -85,6 +99,22 @@ function pushState(): void {
   }
   orbWindow.webContents.send('state-changed', snap)
   lastMode = snap.mode
+
+  if (crossingCenteredBoundary) {
+    const targetWindow = orbWindow
+    const showFocused = isCentered
+    boundsRevealTimer = setTimeout(() => {
+      if (!targetWindow.isDestroyed()) {
+        if (showFocused) {
+          targetWindow.show()
+          targetWindow.focus()
+        } else {
+          targetWindow.showInactive()
+        }
+      }
+      boundsRevealTimer = null
+    }, 50)
+  }
 }
 
 function createWindow(): void {

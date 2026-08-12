@@ -632,28 +632,32 @@ function renderTimeline(sessions: Session[]): void {
   }
 
   const now = Date.now()
-  const starts = sessions.map((s) => new Date(s.startIso).getTime())
-  const ends = sessions.map((s) =>
-    s.endIso ? new Date(s.endIso).getTime() : now
-  )
-  const minT = Math.min(...starts)
-  const maxT = Math.max(...ends, minT + 1)
-  const span = Math.max(maxT - minT, 60_000)
-  // ~120px per hour, min width for scroll
-  const pxPerMs = 120 / (60 * 60 * 1000)
-  const trackW = Math.max(640, span * pxPerMs + 80)
+  const pxPerMs = 100 / (60 * 60 * 1000)
+  const minSegmentWidth = 64
+  const segmentGap = 10
+  let cursor = 24
+  let previousEnd = new Date(sessions[0].startIso).getTime()
+
+  const items = sessions.map((session) => {
+    const start = new Date(session.startIso).getTime()
+    const end = session.endIso ? new Date(session.endIso).getTime() : now
+    const untrackedGap = Math.max(0, start - previousEnd)
+    cursor += Math.min(100, untrackedGap * pxPerMs)
+    const width = Math.max(minSegmentWidth, (end - start) * pxPerMs)
+    const left = cursor
+    cursor += width + segmentGap
+    previousEnd = Math.max(previousEnd, end)
+    return { session, left, width }
+  })
+
+  const trackW = Math.max(640, cursor + 24)
   timelineTrack.style.width = `${trackW}px`
 
   const rail = document.createElement('div')
   rail.className = 'timeline-rail'
   timelineTrack.appendChild(rail)
 
-  sessions.forEach((session, i) => {
-    const s = new Date(session.startIso).getTime()
-    const e = session.endIso ? new Date(session.endIso).getTime() : now
-    const left = ((s - minT) / span) * (trackW - 40) + 20
-    const width = Math.max(28, ((e - s) / span) * (trackW - 40))
-
+  items.forEach(({ session, left, width }, i) => {
     const bubble = document.createElement('button')
     bubble.type = 'button'
     bubble.className = 'timeline-bubble'
@@ -667,16 +671,7 @@ function renderTimeline(sessions: Session[]): void {
 
     const label = document.createElement('span')
     label.className = 'timeline-label'
-
-    const time = document.createElement('span')
-    time.className = 'timeline-time'
-    time.textContent = formatTimeLocal(session.startIso)
-
-    const name = document.createElement('span')
-    name.className = 'timeline-name'
-    name.textContent = session.profileName
-
-    label.append(time, name)
+    label.textContent = `${formatTimeLocal(session.startIso)} · ${session.profileName}`
     bubble.append(bar, label)
 
     bubble.addEventListener('mouseenter', () => {

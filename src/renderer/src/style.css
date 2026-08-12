@@ -764,7 +764,7 @@ body {
 
 .timeline-track {
   position: relative;
-  height: 220px;
+  height: 245px;
   min-width: 100%;
 }
 
@@ -781,36 +781,25 @@ body {
 .timeline-bubble {
   position: absolute;
   top: 20px;
-  height: 190px;
+  height: 215px;
   border: none;
   background: transparent;
   padding: 0;
   cursor: default;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  animation: wheel-in 0.22s ease forwards;
+  animation: timeline-in 0.18s ease forwards;
   opacity: 0;
   color: var(--text);
 }
 
 .timeline-bar {
-  flex-shrink: 0;
+  position: absolute;
+  inset: 0 0 auto;
   width: 100%;
   height: 34px;
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 999px;
-  background:
-    linear-gradient(
-      145deg,
-      rgba(255, 255, 255, 0.28) 0%,
-      rgba(255, 255, 255, 0.06) 100%
-    ),
-    color-mix(in srgb, var(--c, #888) 48%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.35);
+  background: color-mix(in srgb, var(--c, #888) 68%, #232630);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.28);
   pointer-events: none;
 }
 
@@ -823,32 +812,28 @@ body {
 }
 
 .timeline-label {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  /* Rotate so text sits under the capsule, reading upward */
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  max-height: 140px;
+  position: absolute;
+  top: 46px;
+  left: 50%;
+  display: block;
+  max-width: 155px;
   overflow: hidden;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transform: rotate(90deg);
+  transform-origin: top left;
   pointer-events: none;
 }
 
-.timeline-time {
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  color: rgba(255, 255, 255, 0.7);
-  white-space: nowrap;
-}
-
-.timeline-name {
-  font-size: 11px;
-  font-weight: 650;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-height: 110px;
+@keyframes timeline-in {
+  to {
+    opacity: 1;
+  }
 }
 
 .timeline-hover {
