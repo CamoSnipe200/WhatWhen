@@ -20,6 +20,13 @@ const STOP_ACCELS = [
   'Control+Shift+Alt+Oem_3'
 ]
 
+/** Insert segment / comment on current profile */
+const COMMENT_ACCELS = [
+  'Control+Shift+Alt+N',
+  'Ctrl+Shift+Alt+N',
+  'CommandOrControl+Shift+Alt+N'
+]
+
 export type ShortcutMap = { slot: ProfileSlot; accel: string }[]
 
 export function registerShortcuts(
@@ -81,6 +88,27 @@ export function registerShortcuts(
   }
   if (!stopDone) {
     console.warn('Failed to register stop shortcut')
+    ok = false
+  }
+
+  let commentDone = false
+  for (const accel of COMMENT_ACCELS) {
+    try {
+      const commentOk = globalShortcut.register(accel, () => {
+        service.insertSegment()
+        onAfter()
+      })
+      if (commentOk) {
+        registered.push(accel)
+        commentDone = true
+        break
+      }
+    } catch (err) {
+      console.warn(`Error registering comment ${accel}`, err)
+    }
+  }
+  if (!commentDone) {
+    console.warn('Failed to register comment/segment shortcut')
     ok = false
   }
 

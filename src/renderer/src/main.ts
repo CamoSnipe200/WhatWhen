@@ -1,5 +1,11 @@
 import './style.css'
-import type { Profile, ProfileSlot, Session, UiSnapshot } from '../../shared/types'
+import type {
+  DayAnalysis,
+  Profile,
+  ProfileSlot,
+  Session,
+  UiSnapshot
+} from '../../shared/types'
 import { SLOT_DISPLAY, formatDuration, formatTimeLocal } from '../../shared/types'
 
 const MAX_VISIBLE = 7
@@ -14,21 +20,78 @@ const bubbleInput = document.getElementById('bubble-input') as HTMLTextAreaEleme
 const bubbleTitle = document.getElementById('bubble-title') as HTMLDivElement
 const bubbleRange = document.getElementById('bubble-range') as HTMLDivElement
 const bubbleSwatch = document.getElementById('bubble-swatch') as HTMLSpanElement
+const bubbleHint = document.getElementById('bubble-hint') as HTMLDivElement
 const settingsEl = document.getElementById('settings') as HTMLDivElement
 const settingsList = document.getElementById('settings-list') as HTMLDivElement
 const settingsDone = document.getElementById('settings-done') as HTMLButtonElement
+const liveTimer = document.getElementById('live-timer') as HTMLDivElement
+const analysisEl = document.getElementById('analysis') as HTMLDivElement
+const analysisBody = document.getElementById('analysis-body') as HTMLDivElement
+const analysisNotes = document.getElementById('analysis-notes') as HTMLDivElement
+const analysisClose = document.getElementById('analysis-close') as HTMLButtonElement
+const timelineEl = document.getElementById('timeline') as HTMLDivElement
+const timelineTrack = document.getElementById('timeline-track') as HTMLDivElement
+const timelineHover = document.getElementById('timeline-hover') as HTMLDivElement
+const timelineClose = document.getElementById('timeline-close') as HTMLButtonElement
 
 let state: UiSnapshot | null = null
 let editingId: string | null = null
 let draftProfiles: Profile[] | null = null
 let wheelBuilt = false
 
+/** Orb drag state */
+let dragging = false
+let dragMoved = false
+let dragLastX = 0
+let dragLastY = 0
+let dragAnchor: { x: number; y: number } | null = null
+const DRAG_THRESHOLD = 4
+
 function defaultName(slot: ProfileSlot): string {
   return `Profile ${SLOT_DISPLAY[slot]}`
 }
 
+/** Clock-style elapsed that always ticks seconds (shown inside the orb). */
+function formatLiveElapsed(ms: number): string {
+  if (ms < 0) ms = 0
+  const totalSec = Math.floor(ms / 1000)
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  }
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
 /**
- * Smart state apply: elapsed ticks only refresh the orb —
+ * White elapsed digits inside the orb — only while the wheel is open
+ * (orb clicked) and a timer is running. Hidden when idle / closed.
+ */
+function updateLiveTimer(snap: UiSnapshot): void {
+  const running = !!snap.activeSession && !snap.activeSession.endIso
+  const show = running && snap.mode === 'wheel'
+
+  if (show) {
+    const label = formatLiveElapsed(snap.elapsedMs)
+    liveTimer.textContent = label
+    liveTimer.classList.toggle('long', label.length > 5)
+    liveTimer.setAttribute('aria-hidden', 'false')
+    if (!liveTimer.classList.contains('visible')) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => liveTimer.classList.add('visible'))
+      })
+    }
+  } else {
+    liveTimer.classList.remove('visible')
+    liveTimer.classList.remove('long')
+    liveTimer.textContent = ''
+    liveTimer.setAttribute('aria-hidden', 'true')
+  }
+}
+
+/**
+ * Smart state apply: elapsed ticks only refresh the orb + live timer —
  * never rebuild the radial wheel (was flashing every second).
  */
 function applyState(snap: UiSnapshot): void {
@@ -41,10 +104,11 @@ function applyState(snap: UiSnapshot): void {
 
   state = snap
   renderOrb(snap)
+  updateLiveTimer(snap)
 
-  // After opening wheel/stack the cursor is usually still over the orb —
+  // After toggling idle/wheel/stack the cursor is usually still over the orb —
   // re-enable hit-testing without requiring a mouse move (fixes dead clicks).
-  if (snap.mode === 'wheel' || snap.mode === 'stack') {
+  if (snap.mode === 'idle' || snap.mode === 'wheel' || snap.mode === 'stack') {
     window.whatwhen.setIgnoreMouse(false)
   }
 
@@ -62,6 +126,29 @@ function applyState(snap: UiSnapshot): void {
     return
   }
 
+  if (!modeChanged && snap.mode === 'analysis') {
+    // Refresh only when totals change (avoid hover flicker on 1s ticks)
+    const prevTracked = prev?.analysis?.trackedMs
+    const nextTracked = snap.analysis?.trackedMs
+    const prevN = prev?.todaySessions?.length
+    const nextN = snap.todaySessions?.length
+    if (prevTracked !== nextTracked || prevN !== nextN) {
+      renderAnalysis(snap.analysis)
+    }
+    return
+  }
+
+  if (!modeChanged && snap.mode === 'timeline') {
+    const prevN = prev?.todaySessions?.length
+    const nextN = snap.todaySessions?.length
+    const prevEnd = prev?.todaySessions?.map((s) => s.endIso).join('|')
+    const nextEnd = snap.todaySessions.map((s) => s.endIso).join('|')
+    if (prevN !== nextN || prevEnd !== nextEnd) {
+      renderTimeline(snap.todaySessions)
+    }
+    return
+  }
+
   if (modeChanged || !wheelBuilt || profilesChanged) {
     hideAllOverlays(snap.mode)
   }
@@ -71,9 +158,13 @@ function applyState(snap: UiSnapshot): void {
   } else if (snap.mode === 'stack') {
     renderStack(snap.pending)
   } else if (snap.mode === 'bubble' && snap.bubbleSession) {
-    showBubble(snap.bubbleSession)
+    showBubble(snap.bubbleSession, snap.bubbleFromBacklog)
   } else if (snap.mode === 'settings') {
     showSettings(snap.profiles)
+  } else if (snap.mode === 'analysis') {
+    showAnalysis(snap.analysis)
+  } else if (snap.mode === 'timeline') {
+    showTimeline(snap.todaySessions)
   }
 }
 
@@ -95,6 +186,20 @@ function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
     settingsEl.hidden = true
     draftProfiles = null
   }
+  if (nextMode !== 'analysis') {
+    analysisEl.hidden = true
+    analysisNotes.hidden = true
+    analysisBody.innerHTML = ''
+  }
+  if (nextMode !== 'timeline') {
+    timelineEl.hidden = true
+    timelineHover.hidden = true
+    timelineTrack.innerHTML = ''
+  }
+
+  // Orb stays visible for orb-anchored modes; hide for centered overlays
+  const overlayMode = nextMode === 'analysis' || nextMode === 'timeline'
+  orb.hidden = overlayMode
 }
 
 function stripNativeTips(root: ParentNode = document): void {
@@ -118,8 +223,10 @@ function renderOrb(snap: UiSnapshot): void {
   if (n > 0) {
     orbBadge.hidden = false
     orbBadge.textContent = String(n)
+    orbBadge.classList.add('pending')
   } else {
     orbBadge.hidden = true
+    orbBadge.classList.remove('pending')
   }
   stripNativeTips()
 }
@@ -263,7 +370,7 @@ function renderStack(pending: Session[]): void {
   })
 }
 
-function showBubble(session: Session): void {
+function showBubble(session: Session, fromBacklog = false): void {
   bubbleEl.hidden = false
   const isNew = editingId !== session.id
   editingId = session.id
@@ -275,6 +382,9 @@ function showBubble(session: Session): void {
     ? new Date(session.endIso).getTime() - new Date(session.startIso).getTime()
     : 0
   bubbleRange.textContent = `${start} – ${end} · ${formatDuration(ms)}`
+  bubbleHint.textContent = fromBacklog
+    ? 'Enter to save · Esc dismisses'
+    : 'Enter to save · Esc keeps pending if empty'
   if (isNew) {
     bubbleInput.value = session.notes || ''
     requestAnimationFrame(() => bubbleInput.focus())
@@ -348,13 +458,264 @@ async function saveSettingsAndClose(): Promise<void> {
   await window.whatwhen.closeUi()
 }
 
+// —— Analysis ——
+function showAnalysis(analysis: DayAnalysis | null): void {
+  analysisEl.hidden = false
+  renderAnalysis(analysis)
+}
+
+function renderAnalysis(analysis: DayAnalysis | null): void {
+  analysisBody.innerHTML = ''
+  analysisNotes.hidden = true
+
+  if (!analysis || analysis.slices.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'overlay-empty'
+    empty.textContent = 'No sessions yet today.'
+    analysisBody.appendChild(empty)
+    return
+  }
+
+  const summary = document.createElement('div')
+  summary.className = 'analysis-summary'
+  summary.textContent = `Tracked ${formatDuration(analysis.trackedMs)} (${analysis.trackedPercent.toFixed(0)}%) · Untracked ${formatDuration(analysis.untrackedMs)} (${analysis.untrackedPercent.toFixed(0)}%)`
+  analysisBody.appendChild(summary)
+
+  const charts = document.createElement('div')
+  charts.className = 'analysis-charts'
+
+  const pieWrap = document.createElement('div')
+  pieWrap.className = 'pie-wrap'
+  pieWrap.appendChild(buildPieSvg(analysis))
+  charts.appendChild(pieWrap)
+
+  const bars = document.createElement('div')
+  bars.className = 'bar-list'
+  for (const slice of analysis.slices) {
+    const row = document.createElement('div')
+    row.className = 'bar-row'
+    row.dataset.slice = slice.profileName
+
+    const label = document.createElement('div')
+    label.className = 'bar-label'
+    const sw = document.createElement('span')
+    sw.className = 'bar-swatch'
+    sw.style.background = slice.profileColor
+    const name = document.createElement('span')
+    name.textContent = slice.profileName
+    label.append(sw, name)
+
+    const track = document.createElement('div')
+    track.className = 'bar-track'
+    const fill = document.createElement('div')
+    fill.className = 'bar-fill'
+    fill.style.width = `${Math.max(2, slice.percentOfDay)}%`
+    fill.style.background = slice.profileColor
+    track.appendChild(fill)
+
+    const pct = document.createElement('div')
+    pct.className = 'bar-pct'
+    pct.textContent = `${slice.percentOfDay.toFixed(0)}%`
+
+    row.append(label, track, pct)
+
+    const showNotes = (): void => {
+      if (slice.notes.length === 0) {
+        analysisNotes.hidden = true
+        return
+      }
+      analysisNotes.hidden = false
+      analysisNotes.innerHTML = ''
+      const head = document.createElement('div')
+      head.className = 'analysis-notes-title'
+      head.textContent = slice.profileName
+      analysisNotes.appendChild(head)
+      const list = document.createElement('ul')
+      list.className = 'analysis-notes-list'
+      for (const n of slice.notes) {
+        const li = document.createElement('li')
+        li.textContent = n
+        list.appendChild(li)
+      }
+      analysisNotes.appendChild(list)
+    }
+    const hideNotes = (): void => {
+      analysisNotes.hidden = true
+    }
+    row.addEventListener('mouseenter', showNotes)
+    row.addEventListener('mouseleave', hideNotes)
+
+    bars.appendChild(row)
+  }
+  charts.appendChild(bars)
+  analysisBody.appendChild(charts)
+}
+
+function buildPieSvg(analysis: DayAnalysis): SVGSVGElement {
+  const size = 160
+  const cx = size / 2
+  const cy = size / 2
+  const r = 68
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`)
+  svg.setAttribute('width', String(size))
+  svg.setAttribute('height', String(size))
+  svg.classList.add('pie-chart')
+
+  let angle = -Math.PI / 2
+  const total = analysis.dayMs || 1
+
+  for (const slice of analysis.slices) {
+    const sweep = (slice.durationMs / total) * Math.PI * 2
+    if (sweep <= 0) continue
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    const x1 = cx + r * Math.cos(angle)
+    const y1 = cy + r * Math.sin(angle)
+    const end = angle + sweep
+    const x2 = cx + r * Math.cos(end)
+    const y2 = cy + r * Math.sin(end)
+    const large = sweep > Math.PI ? 1 : 0
+    path.setAttribute(
+      'd',
+      `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`
+    )
+    path.setAttribute('fill', slice.profileColor)
+    path.setAttribute('opacity', slice.profileSlot === null ? '0.45' : '0.88')
+    path.setAttribute('stroke', 'rgba(0,0,0,0.25)')
+    path.setAttribute('stroke-width', '1')
+
+    path.addEventListener('mouseenter', () => {
+      if (slice.notes.length === 0) {
+        analysisNotes.hidden = true
+        return
+      }
+      analysisNotes.hidden = false
+      analysisNotes.innerHTML = ''
+      const head = document.createElement('div')
+      head.className = 'analysis-notes-title'
+      head.textContent = slice.profileName
+      analysisNotes.appendChild(head)
+      const list = document.createElement('ul')
+      list.className = 'analysis-notes-list'
+      for (const n of slice.notes) {
+        const li = document.createElement('li')
+        li.textContent = n
+        list.appendChild(li)
+      }
+      analysisNotes.appendChild(list)
+    })
+    path.addEventListener('mouseleave', () => {
+      analysisNotes.hidden = true
+    })
+
+    svg.appendChild(path)
+    angle = end
+  }
+
+  return svg
+}
+
+// —— Timeline ——
+function showTimeline(sessions: Session[]): void {
+  timelineEl.hidden = false
+  renderTimeline(sessions)
+}
+
+function renderTimeline(sessions: Session[]): void {
+  timelineTrack.innerHTML = ''
+  timelineHover.hidden = true
+
+  if (sessions.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'overlay-empty'
+    empty.textContent = 'No sessions yet today.'
+    timelineTrack.appendChild(empty)
+    return
+  }
+
+  const now = Date.now()
+  const starts = sessions.map((s) => new Date(s.startIso).getTime())
+  const ends = sessions.map((s) =>
+    s.endIso ? new Date(s.endIso).getTime() : now
+  )
+  const minT = Math.min(...starts)
+  const maxT = Math.max(...ends, minT + 1)
+  const span = Math.max(maxT - minT, 60_000)
+  // ~120px per hour, min width for scroll
+  const pxPerMs = 120 / (60 * 60 * 1000)
+  const trackW = Math.max(640, span * pxPerMs + 80)
+  timelineTrack.style.width = `${trackW}px`
+
+  const rail = document.createElement('div')
+  rail.className = 'timeline-rail'
+  timelineTrack.appendChild(rail)
+
+  sessions.forEach((session, i) => {
+    const s = new Date(session.startIso).getTime()
+    const e = session.endIso ? new Date(session.endIso).getTime() : now
+    const left = ((s - minT) / span) * (trackW - 40) + 20
+    const width = Math.max(28, ((e - s) / span) * (trackW - 40))
+
+    const bubble = document.createElement('button')
+    bubble.type = 'button'
+    bubble.className = 'timeline-bubble'
+    bubble.style.left = `${left}px`
+    bubble.style.width = `${width}px`
+    bubble.style.setProperty('--c', session.profileColor)
+    bubble.style.animationDelay = `${i * 30}ms`
+
+    const bar = document.createElement('span')
+    bar.className = 'timeline-bar'
+
+    const label = document.createElement('span')
+    label.className = 'timeline-label'
+
+    const time = document.createElement('span')
+    time.className = 'timeline-time'
+    time.textContent = formatTimeLocal(session.startIso)
+
+    const name = document.createElement('span')
+    name.className = 'timeline-name'
+    name.textContent = session.profileName
+
+    label.append(time, name)
+    bubble.append(bar, label)
+
+    bubble.addEventListener('mouseenter', () => {
+      timelineHover.hidden = false
+      const note = session.notes.trim()
+        ? session.notes.trim()
+        : session.notesStatus === 'pending'
+          ? '(pending notes)'
+          : session.endIso
+            ? '(no notes)'
+            : '(in progress)'
+      const endLabel = session.endIso ? formatTimeLocal(session.endIso) : '…'
+      timelineHover.innerHTML = ''
+      const h = document.createElement('div')
+      h.className = 'timeline-hover-title'
+      h.textContent = `${session.profileName} · ${formatTimeLocal(session.startIso)} – ${endLabel}`
+      const body = document.createElement('div')
+      body.className = 'timeline-hover-note'
+      body.textContent = note
+      timelineHover.append(h, body)
+    })
+    bubble.addEventListener('mouseleave', () => {
+      timelineHover.hidden = true
+    })
+
+    timelineTrack.appendChild(bubble)
+  })
+}
+
 /**
- * Expanded wheel/stack uses pass-through on empty glass. Interactive nodes
- * temporarily disable pass-through while the cursor is over them.
- * Idle / bubble / settings: main process owns mouse policy (no ignore games).
+ * Idle/wheel/stack use a large transparent HWND with pass-through on empty
+ * glass. Interactive nodes temporarily disable pass-through while hovered.
+ * Bubble / settings / overlays: main process owns mouse policy.
  */
 function needsPassThrough(): boolean {
-  return state?.mode === 'wheel' || state?.mode === 'stack'
+  const mode = state?.mode
+  return mode === 'idle' || mode === 'wheel' || mode === 'stack'
 }
 
 function wireHit(el: HTMLElement): void {
@@ -370,10 +731,57 @@ wireHit(wheelEl)
 wireHit(stackEl)
 wireHit(bubbleEl)
 wireHit(settingsEl)
+wireHit(analysisEl)
+wireHit(timelineEl)
+
+// —— Orb drag (click-and-hold move) ——
+orb.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return
+  if (state?.mode !== 'idle') return
+  dragging = true
+  dragMoved = false
+  dragLastX = e.screenX
+  dragLastY = e.screenY
+  dragAnchor = null
+  orb.setPointerCapture(e.pointerId)
+})
+
+orb.addEventListener('pointermove', (e) => {
+  if (!dragging) return
+  const dx = e.screenX - dragLastX
+  const dy = e.screenY - dragLastY
+  if (!dragMoved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return
+  dragMoved = true
+  dragLastX = e.screenX
+  dragLastY = e.screenY
+  void window.whatwhen.dragOrb(dx, dy).then((anchor) => {
+    dragAnchor = anchor
+  })
+})
+
+function endDrag(e: PointerEvent): void {
+  if (!dragging) return
+  dragging = false
+  try {
+    orb.releasePointerCapture(e.pointerId)
+  } catch {
+    /* already released */
+  }
+  if (dragMoved && dragAnchor) {
+    void window.whatwhen.endOrbDrag(dragAnchor)
+  }
+}
+
+orb.addEventListener('pointerup', endDrag)
+orb.addEventListener('pointercancel', endDrag)
 
 // —— Events ——
 orb.addEventListener('click', (e) => {
   e.stopPropagation()
+  if (dragMoved) {
+    dragMoved = false
+    return
+  }
   if (state?.mode === 'bubble') {
     void leaveBubbleSaving()
     return
@@ -396,13 +804,37 @@ settingsDone.addEventListener('click', () => {
   void saveSettingsAndClose()
 })
 
+analysisClose.addEventListener('click', () => {
+  void window.whatwhen.closeUi()
+})
+
+timelineClose.addEventListener('click', () => {
+  void window.whatwhen.closeUi()
+})
+
+/** Enter / orb click: save (empty clears pending as intentional blank). */
 async function leaveBubbleSaving(): Promise<void> {
   const text = bubbleInput.value
   const id = editingId
   if (id) {
     await window.whatwhen.saveNotes(id, text)
   } else {
-    await window.whatwhen.bubbleEscape(text)
+    await window.whatwhen.dismissBubble(text)
+  }
+}
+
+/**
+ * Escape: empty draft —
+ * - Fresh switch/stop note → leave UI, keep pending badge
+ * - Backlog pending note → dismiss so it leaves the queue
+ * With text → save and clear pending.
+ */
+async function leaveBubbleEscape(): Promise<void> {
+  const text = bubbleInput.value
+  if (text.trim()) {
+    await leaveBubbleSaving()
+  } else {
+    await window.whatwhen.bubbleEscape()
   }
 }
 
@@ -413,8 +845,7 @@ bubbleInput.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape') {
     e.preventDefault()
     e.stopPropagation()
-    // Leaving still saves (default save)
-    void leaveBubbleSaving()
+    void leaveBubbleEscape()
   }
 })
 
@@ -431,8 +862,13 @@ bubbleInput.addEventListener('blur', () => {
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !state) return
   if (state.mode === 'bubble') {
-    void leaveBubbleSaving()
-  } else if (state.mode === 'stack' || state.mode === 'wheel') {
+    void leaveBubbleEscape()
+  } else if (
+    state.mode === 'stack' ||
+    state.mode === 'wheel' ||
+    state.mode === 'analysis' ||
+    state.mode === 'timeline'
+  ) {
     void window.whatwhen.closeUi()
   } else if (state.mode === 'settings') {
     void saveSettingsAndClose()

@@ -5,6 +5,7 @@ import {
   DayLog,
   Profile,
   Session,
+  computeDayAnalysis,
   defaultProfiles,
   formatDuration,
   formatTimeLocal,
@@ -28,7 +29,9 @@ function defaultSettings(): AppSettings {
     logDir: getDefaultLogDir(),
     autostart: false,
     orbSize: 52,
-    marginPx: 20
+    marginPx: 20,
+    orbAnchorX: null,
+    orbAnchorY: null
   }
 }
 
@@ -47,6 +50,8 @@ export function loadConfig(): AppConfig {
     const profiles = mergeProfiles(raw.profiles)
     const settings = { ...defaultSettings(), ...raw.settings }
     if (!settings.logDir) settings.logDir = getDefaultLogDir()
+    if (settings.orbAnchorX === undefined) settings.orbAnchorX = null
+    if (settings.orbAnchorY === undefined) settings.orbAnchorY = null
     return { profiles, settings }
   } catch {
     return { profiles: defaultProfiles(), settings: defaultSettings() }
@@ -129,34 +134,73 @@ export function listPending(logDir: string, dateKey = localDateKey()): Session[]
     .sort((a, b) => new Date(a.startIso).getTime() - new Date(b.startIso).getTime())
 }
 
+function pct(n: number): string {
+  return `${n.toFixed(1)}%`
+}
+
 function renderMarkdown(log: DayLog): string {
   const lines: string[] = [`# WhatWhen — ${log.date}`, '', '## Sessions', '']
 
   if (log.sessions.length === 0) {
     lines.push('_No sessions yet._', '')
-    return lines.join('\n')
+  } else {
+    for (const s of log.sessions) {
+      const start = formatTimeLocal(s.startIso)
+      const end = s.endIso ? formatTimeLocal(s.endIso) : '…'
+      const ms =
+        s.endIso != null
+          ? new Date(s.endIso).getTime() - new Date(s.startIso).getTime()
+          : Date.now() - new Date(s.startIso).getTime()
+      const dur = formatDuration(ms)
+      lines.push(`### ${s.profileName} · ${start} – ${end} (${dur})`)
+      lines.push(`- Profile: ${s.profileName}`)
+      if (!s.endIso) {
+        lines.push(`- Notes: *(in progress)*`)
+      } else if (s.notes.trim()) {
+        lines.push(`- Notes: ${s.notes.trim()}`)
+      } else if (s.notesStatus === 'pending') {
+        lines.push(`- Notes: *(pending)*`)
+      } else if (s.notesStatus === 'skipped') {
+        lines.push(`- Notes: *(skipped)*`)
+      } else {
+        lines.push(`- Notes:`)
+      }
+      lines.push('')
+    }
   }
 
-  for (const s of log.sessions) {
-    const start = formatTimeLocal(s.startIso)
-    const end = s.endIso ? formatTimeLocal(s.endIso) : '…'
-    const ms =
-      s.endIso != null
-        ? new Date(s.endIso).getTime() - new Date(s.startIso).getTime()
-        : Date.now() - new Date(s.startIso).getTime()
-    const dur = formatDuration(ms)
-    lines.push(`### ${s.profileName} · ${start} – ${end} (${dur})`)
-    lines.push(`- Profile: ${s.profileName}`)
-    if (!s.endIso) {
-      lines.push(`- Notes: *(in progress)*`)
-    } else if (s.notes.trim()) {
-      lines.push(`- Notes: ${s.notes.trim()}`)
-    } else if (s.notesStatus === 'pending') {
-      lines.push(`- Notes: *(pending)*`)
-    } else {
-      lines.push(`- Notes:`)
+  const analysis = computeDayAnalysis(log)
+  lines.push('## Analysis', '')
+  lines.push(
+    `- Tracked: ${formatDuration(analysis.trackedMs)} (${pct(analysis.trackedPercent)} of day)`
+  )
+  lines.push(
+    `- Untracked: ${formatDuration(analysis.untrackedMs)} (${pct(analysis.untrackedPercent)} of day)`
+  )
+  lines.push('')
+
+  if (analysis.slices.length === 0) {
+    lines.push('_No tracked time yet._', '')
+  } else {
+    lines.push('| Where | Duration | % of day | % of tracked |')
+    lines.push('| --- | --- | --- | --- |')
+    for (const slice of analysis.slices) {
+      const trackedCol =
+        slice.profileSlot === null ? '—' : pct(slice.percentOfTracked)
+      lines.push(
+        `| ${slice.profileName} | ${formatDuration(slice.durationMs)} | ${pct(slice.percentOfDay)} | ${trackedCol} |`
+      )
     }
     lines.push('')
+
+    for (const slice of analysis.slices) {
+      if (slice.profileSlot === null || slice.notes.length === 0) continue
+      lines.push(`### Notes — ${slice.profileName}`, '')
+      for (const note of slice.notes) {
+        lines.push(`- ${note}`)
+      }
+      lines.push('')
+    }
   }
 
   return lines.join('\n')

@@ -32,7 +32,7 @@
               placeholder="What did you do?"
               spellcheck="true"
             ></textarea>
-            <div class="bubble-hint">Enter or leave to save</div>
+            <div id="bubble-hint" class="bubble-hint">Enter to save · Esc keeps pending if empty</div>
           </div>
           <div class="bubble-tail"></div>
         </div>
@@ -46,10 +46,40 @@
           </div>
         </div>
 
+        <div id="analysis" class="overlay-panel analysis" hidden>
+          <div class="overlay-inner">
+            <div class="overlay-header">
+              <div class="overlay-title">Analysis</div>
+              <button type="button" id="analysis-close" class="overlay-close" aria-label="Close">
+                ×
+              </button>
+            </div>
+            <div id="analysis-body" class="analysis-body"></div>
+            <div id="analysis-notes" class="analysis-notes" hidden></div>
+          </div>
+        </div>
+
+        <div id="timeline" class="overlay-panel timeline" hidden>
+          <div class="overlay-inner">
+            <div class="overlay-header">
+              <div class="overlay-title">Timeline</div>
+              <button type="button" id="timeline-close" class="overlay-close" aria-label="Close">
+                ×
+              </button>
+            </div>
+            <div id="timeline-scroll" class="timeline-scroll">
+              <div id="timeline-track" class="timeline-track"></div>
+            </div>
+            <div id="timeline-hover" class="timeline-hover" hidden></div>
+          </div>
+        </div>
+
         <button id="orb" class="orb" type="button">
           <span class="orb-glass"></span>
           <span class="orb-tint" id="orb-tint"></span>
           <span class="orb-ring"></span>
+          <!-- Live elapsed — white digits in the orb only while the wheel is open -->
+          <span id="live-timer" class="live-timer" aria-hidden="true"></span>
           <span class="orb-badge" id="orb-badge" hidden></span>
         </button>
       </div>

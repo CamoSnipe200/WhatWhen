@@ -12,23 +12,29 @@ export const WHEEL_W = 320
 export const WHEEL_H = 300
 export const SETTINGS_W = 320
 export const SETTINGS_H = 420
+export const OVERLAY_W = 760
+export const OVERLAY_H = 440
 export const MARGIN = 16
 
+export interface OrbAnchor {
+  x: number
+  y: number
+}
+
 /**
- * Tight when idle (orb only). Expand only when UI is open.
- * A large idle HWND leaves a dead transparent slab that steals clicks
- * and can paint a white bar on Windows.
+ * Idle and wheel share the same HWND size. Resizing a bottom-right-anchored
+ * transparent window on Windows briefly applies the new (x,y) with the old
+ * size (or vice versa), which flashes a ghost copy of the UI up/left of the
+ * orb. Keep bounds stable and toggle content + mouse pass-through instead.
+ *
+ * Stack / bubble / settings / overlays still use their own sizes.
  */
 export function computeLayout(
   mode: UiMode,
   pendingCount: number,
   orbSize = ORB_SIZE
 ): { width: number; height: number } {
-  const pad = 4
-  if (mode === 'idle') {
-    return { width: orbSize + pad * 2, height: orbSize + pad * 2 }
-  }
-  if (mode === 'wheel') {
+  if (mode === 'idle' || mode === 'wheel') {
     return { width: WHEEL_W, height: WHEEL_H }
   }
   if (mode === 'stack') {
@@ -42,9 +48,38 @@ export function computeLayout(
   if (mode === 'settings') {
     return { width: SETTINGS_W + 16, height: SETTINGS_H + orbSize + 24 }
   }
+  if (mode === 'analysis' || mode === 'timeline') {
+    return { width: OVERLAY_W, height: OVERLAY_H }
+  }
   return {
     width: Math.max(BUBBLE_W + 16, orbSize + 24),
     height: orbSize + BUBBLE_H + 28
+  }
+}
+
+export function defaultAnchor(margin = MARGIN): OrbAnchor {
+  const { workArea } = screen.getPrimaryDisplay()
+  return {
+    x: Math.round(workArea.x + workArea.width - margin),
+    y: Math.round(workArea.y + workArea.height - margin)
+  }
+}
+
+/** Clamp anchor so a given window size stays mostly on-screen */
+export function clampAnchor(
+  anchor: OrbAnchor,
+  width: number,
+  height: number,
+  margin = MARGIN
+): OrbAnchor {
+  const { workArea } = screen.getPrimaryDisplay()
+  const minX = workArea.x + margin + width
+  const maxX = workArea.x + workArea.width - margin
+  const minY = workArea.y + margin + height
+  const maxY = workArea.y + workArea.height - margin
+  return {
+    x: Math.round(Math.min(maxX, Math.max(minX, anchor.x))),
+    y: Math.round(Math.min(maxY, Math.max(minY, anchor.y)))
   }
 }
 
@@ -88,7 +123,8 @@ export function createOrbWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => {
     win.setTitle('')
-    positionBottomRight(win, width, height)
+    const anchor = defaultAnchor()
+    applyLayout(win, 'idle', 0, ORB_SIZE, MARGIN, anchor)
     win.showInactive()
   })
 
@@ -105,31 +141,75 @@ export function createOrbWindow(): BrowserWindow {
   return win
 }
 
-export function positionBottomRight(
-  win: BrowserWindow,
-  width: number,
-  height: number,
-  margin = MARGIN
-): void {
-  const display = screen.getPrimaryDisplay()
-  const { workArea } = display
-  const x = Math.round(workArea.x + workArea.width - width - margin)
-  const y = Math.round(workArea.y + workArea.height - height - margin)
-  win.setBounds({ x, y, width, height })
-  win.setBackgroundColor('#00000000')
-  win.setHasShadow(false)
-}
-
+/**
+ * Place window so its bottom-right corner sits on the orb anchor.
+ * Analysis / timeline overlays are centered on the display instead.
+ */
 export function applyLayout(
   win: BrowserWindow,
   mode: UiMode,
   pendingCount: number,
   orbSize = ORB_SIZE,
-  margin = MARGIN
+  margin = MARGIN,
+  anchor: OrbAnchor | null = null
 ): void {
   const { width, height } = computeLayout(mode, pendingCount, orbSize)
-  positionBottomRight(win, width, height, margin)
+  let x: number
+  let y: number
+
+  if (mode === 'analysis' || mode === 'timeline') {
+    const { workArea } = screen.getPrimaryDisplay()
+    x = Math.round(workArea.x + (workArea.width - width) / 2)
+    y = Math.round(workArea.y + (workArea.height - height) / 2)
+  } else {
+    const resolved = clampAnchor(
+      anchor ?? defaultAnchor(margin),
+      width,
+      height,
+      margin
+    )
+    x = resolved.x - width
+    y = resolved.y - height
+  }
+
+  const cur = win.getBounds()
+  if (
+    cur.x === x &&
+    cur.y === y &&
+    cur.width === width &&
+    cur.height === height
+  ) {
+    win.setTitle('')
+    return
+  }
+
+  win.setBounds({ x, y, width, height })
+  win.setBackgroundColor('#00000000')
+  win.setHasShadow(false)
   win.setTitle('')
+}
+
+/** Move idle/orb window keeping size; returns new bottom-right anchor */
+export function moveWindowBy(
+  win: BrowserWindow,
+  dx: number,
+  dy: number,
+  margin = MARGIN
+): OrbAnchor {
+  const b = win.getBounds()
+  const next = clampAnchor(
+    { x: b.x + b.width + dx, y: b.y + b.height + dy },
+    b.width,
+    b.height,
+    margin
+  )
+  win.setBounds({
+    x: next.x - b.width,
+    y: next.y - b.height,
+    width: b.width,
+    height: b.height
+  })
+  return next
 }
 
 export function loadRenderer(win: BrowserWindow): void {

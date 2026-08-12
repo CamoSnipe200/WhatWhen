@@ -29,6 +29,10 @@ export interface AppSettings {
   autostart: boolean
   orbSize: number
   marginPx: number
+  /** Absolute screen X of the orb window's bottom-right corner */
+  orbAnchorX: number | null
+  /** Absolute screen Y of the orb window's bottom-right corner */
+  orbAnchorY: number | null
 }
 
 export interface AppConfig {
@@ -37,7 +41,36 @@ export interface AppConfig {
 }
 
 /** UI mode for the expandable orb window */
-export type UiMode = 'idle' | 'wheel' | 'stack' | 'bubble' | 'settings'
+export type UiMode =
+  | 'idle'
+  | 'wheel'
+  | 'stack'
+  | 'bubble'
+  | 'settings'
+  | 'analysis'
+  | 'timeline'
+
+export interface ProfileSlice {
+  profileSlot: ProfileSlot | null
+  profileName: string
+  profileColor: string
+  durationMs: number
+  percentOfDay: number
+  percentOfTracked: number
+  notes: string[]
+}
+
+export interface DayAnalysis {
+  date: string
+  dayStartIso: string
+  dayEndIso: string
+  dayMs: number
+  trackedMs: number
+  untrackedMs: number
+  trackedPercent: number
+  untrackedPercent: number
+  slices: ProfileSlice[]
+}
 
 export interface UiSnapshot {
   mode: UiMode
@@ -48,10 +81,16 @@ export interface UiSnapshot {
   pending: Session[]
   /** Session currently edited in bubble */
   bubbleSession: Session | null
+  /** True when bubble was opened from the pending backlog (not a fresh switch/stop) */
+  bubbleFromBacklog: boolean
   profiles: Profile[]
   hotkeysOk: boolean
   /** Whether today's markdown log file exists */
   todayLogExists: boolean
+  /** Today's sessions for timeline / analysis overlays */
+  todaySessions: Session[]
+  /** Precomputed day analysis (today) */
+  analysis: DayAnalysis | null
 }
 
 export interface PromptPayload {
@@ -113,4 +152,106 @@ export function localDateKey(d = new Date()): string {
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
+}
+
+/** Start of local calendar day for a date key or Date */
+export function dayStart(d = new Date()): Date {
+  const out = new Date(d)
+  out.setHours(0, 0, 0, 0)
+  return out
+}
+
+/** End of analysis window: now for today, else end of that calendar day */
+export function dayEndFor(dateKey: string, now = new Date()): Date {
+  if (dateKey === localDateKey(now)) return now
+  const [y, m, day] = dateKey.split('-').map(Number)
+  const end = new Date(y, m - 1, day, 23, 59, 59, 999)
+  return end
+}
+
+export function computeDayAnalysis(
+  log: DayLog,
+  now = new Date()
+): DayAnalysis {
+  const start = dayStart(
+    (() => {
+      const [y, m, day] = log.date.split('-').map(Number)
+      return new Date(y, m - 1, day)
+    })()
+  )
+  const end = dayEndFor(log.date, now)
+  const dayMs = Math.max(1, end.getTime() - start.getTime())
+
+  type Acc = {
+    profileSlot: ProfileSlot | null
+    profileName: string
+    profileColor: string
+    durationMs: number
+    notes: string[]
+  }
+
+  const byKey = new Map<string, Acc>()
+  let trackedMs = 0
+
+  for (const s of log.sessions) {
+    const sStart = Math.max(new Date(s.startIso).getTime(), start.getTime())
+    const sEndRaw = s.endIso ? new Date(s.endIso).getTime() : now.getTime()
+    const sEnd = Math.min(sEndRaw, end.getTime())
+    const dur = Math.max(0, sEnd - sStart)
+    if (dur <= 0) continue
+    trackedMs += dur
+    const key = `${s.profileSlot}:${s.profileName}`
+    let acc = byKey.get(key)
+    if (!acc) {
+      acc = {
+        profileSlot: s.profileSlot,
+        profileName: s.profileName,
+        profileColor: s.profileColor,
+        durationMs: 0,
+        notes: []
+      }
+      byKey.set(key, acc)
+    }
+    acc.durationMs += dur
+    const note = s.notes.trim()
+    if (note) acc.notes.push(note)
+    else if (s.notesStatus === 'pending') acc.notes.push('(pending)')
+  }
+
+  const untrackedMs = Math.max(0, dayMs - trackedMs)
+  const slices: ProfileSlice[] = [...byKey.values()]
+    .sort((a, b) => b.durationMs - a.durationMs)
+    .map((a) => ({
+      profileSlot: a.profileSlot,
+      profileName: a.profileName,
+      profileColor: a.profileColor,
+      durationMs: a.durationMs,
+      percentOfDay: (a.durationMs / dayMs) * 100,
+      percentOfTracked: trackedMs > 0 ? (a.durationMs / trackedMs) * 100 : 0,
+      notes: a.notes
+    }))
+
+  if (untrackedMs > 0) {
+    slices.push({
+      profileSlot: null,
+      profileName: 'Untracked',
+      profileColor: '#6b7280',
+      durationMs: untrackedMs,
+      percentOfDay: (untrackedMs / dayMs) * 100,
+      percentOfTracked: 0,
+      notes: []
+    })
+  }
+
+  return {
+    date: log.date,
+    dayStartIso: start.toISOString(),
+    dayEndIso: end.toISOString(),
+    dayMs,
+    trackedMs,
+    untrackedMs,
+    trackedPercent: (trackedMs / dayMs) * 100,
+    untrackedPercent: (untrackedMs / dayMs) * 100,
+    slices
+  }
 }

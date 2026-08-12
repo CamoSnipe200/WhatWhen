@@ -5,8 +5,11 @@ import { registerShortcutsWithRetry, unregisterShortcuts } from './shortcuts'
 import {
   applyLayout,
   createOrbWindow,
+  defaultAnchor,
   loadRenderer,
-  ORB_SIZE
+  moveWindowBy,
+  ORB_SIZE,
+  type OrbAnchor
 } from './window'
 import { getDayMarkdownPath, getDefaultLogDir } from './paths'
 import { localDateKey, type Profile, type ProfileSlot } from '../shared/types'
@@ -21,30 +24,39 @@ if (!gotLock) {
 
 let orbWindow: BrowserWindow | null = null
 let service: SessionService
+let lastMode: string | null = null
+let contextMenuOpen = false
+
+function getAnchor(): OrbAnchor {
+  const s = service.getConfig().settings
+  if (s.orbAnchorX != null && s.orbAnchorY != null) {
+    return { x: s.orbAnchorX, y: s.orbAnchorY }
+  }
+  return defaultAnchor(s.marginPx ?? 20)
+}
 
 /**
- * Idle = tiny window over the orb only → capture all mouse events (no pass-through lag).
- * Expanded = larger transparent chrome → pass clicks through empty pixels; renderer
- * re-enables hit-testing when the cursor is over real UI.
+ * Idle/wheel/stack share a large transparent HWND (idle≈wheel size to avoid
+ * resize flicker). Empty glass uses pass-through; the renderer re-enables
+ * hit-testing when the cursor is over the orb or other interactive UI.
+ * Focused overlays (bubble/settings/analysis/timeline) capture all clicks.
  */
 function applyMousePolicy(mode: string): void {
   if (!orbWindow || orbWindow.isDestroyed()) return
 
-  if (mode === 'idle') {
-    orbWindow.setFocusable(false)
-    // Small HWND: always receive clicks on the orb. No ignore lag after close.
-    orbWindow.setIgnoreMouseEvents(false)
-    return
-  }
-
-  if (mode === 'bubble' || mode === 'settings') {
+  if (
+    mode === 'bubble' ||
+    mode === 'settings' ||
+    mode === 'analysis' ||
+    mode === 'timeline'
+  ) {
     orbWindow.setFocusable(true)
     orbWindow.setIgnoreMouseEvents(false)
     orbWindow.focus()
     return
   }
 
-  // wheel / stack — not keyboard-focused; pass through empty glass
+  // idle / wheel / stack — not keyboard-focused; pass through empty glass
   orbWindow.setFocusable(false)
   orbWindow.setIgnoreMouseEvents(true, { forward: true })
 }
@@ -52,15 +64,27 @@ function applyMousePolicy(mode: string): void {
 function pushState(): void {
   if (!orbWindow || orbWindow.isDestroyed()) return
   const snap = service.snapshot()
+  const orbSize = service.getConfig().settings.orbSize || ORB_SIZE
+  const margin = service.getConfig().settings.marginPx
+  const anchor = getAnchor()
+  const modeChanged = lastMode !== snap.mode
+
   applyLayout(
     orbWindow,
     snap.mode,
     snap.pending.length,
-    service.getConfig().settings.orbSize || ORB_SIZE,
-    service.getConfig().settings.marginPx
+    orbSize,
+    margin,
+    anchor
   )
+  // Mode-change mouse policy before state paint so the renderer can then
+  // re-enable hit-testing while the cursor is still over the orb.
+  // Skip on elapsed-only ticks — resetting ignore every second races clicks.
+  if (modeChanged) {
+    applyMousePolicy(snap.mode)
+  }
   orbWindow.webContents.send('state-changed', snap)
-  applyMousePolicy(snap.mode)
+  lastMode = snap.mode
 }
 
 function createWindow(): void {
@@ -75,12 +99,24 @@ function createWindow(): void {
       document.title = '';
       document.querySelectorAll('[title]').forEach((el) => el.removeAttribute('title'));
     `)
+    // Apply saved anchor after load
     pushState()
   })
 
   orbWindow.webContents.on('page-title-updated', (e) => {
     e.preventDefault()
     orbWindow?.setTitle('')
+  })
+
+  // Losing focus dismisses keyboard overlays; also helps context-menu cleanup
+  orbWindow.on('blur', () => {
+    if (contextMenuOpen) return
+    if (!orbWindow || orbWindow.isDestroyed()) return
+    const mode = service.snapshot().mode
+    if (mode === 'analysis' || mode === 'timeline' || mode === 'settings') {
+      // Don't auto-close analysis on blur — user may alt-tab briefly
+      return
+    }
   })
 
   orbWindow.on('closed', () => {
@@ -93,6 +129,12 @@ function setupIpc(): void {
 
   ipcMain.handle('switch-profile', (_e, slot: ProfileSlot) => {
     service.switchProfile(slot)
+    pushState()
+    return service.snapshot()
+  })
+
+  ipcMain.handle('insert-segment', () => {
+    service.insertSegment()
     pushState()
     return service.snapshot()
   })
@@ -129,6 +171,18 @@ function setupIpc(): void {
     return service.snapshot()
   })
 
+  ipcMain.handle('open-analysis', () => {
+    service.openAnalysis()
+    pushState()
+    return service.snapshot()
+  })
+
+  ipcMain.handle('open-timeline', () => {
+    service.openTimeline()
+    pushState()
+    return service.snapshot()
+  })
+
   ipcMain.handle('open-bubble', (_e, sessionId: string) => {
     service.openBubble(sessionId)
     pushState()
@@ -142,7 +196,7 @@ function setupIpc(): void {
   })
 
   ipcMain.handle('bubble-escape', (_e, notes?: string) => {
-    if (typeof notes === 'string') {
+    if (typeof notes === 'string' && notes.trim()) {
       service.dismissBubbleWithNotes(notes)
     } else {
       service.bubbleEscape()
@@ -186,6 +240,25 @@ function setupIpc(): void {
     return service.getConfig()
   })
 
+  ipcMain.handle('drag-orb', (_e, dx: number, dy: number) => {
+    if (!orbWindow || orbWindow.isDestroyed()) return getAnchor()
+    const mode = service.snapshot().mode
+    // Only drag while idle (tight orb window)
+    if (mode !== 'idle') return getAnchor()
+    const margin = service.getConfig().settings.marginPx
+    const next = moveWindowBy(orbWindow, dx, dy, margin)
+    return next
+  })
+
+  ipcMain.handle('end-orb-drag', (_e, anchor: OrbAnchor) => {
+    if (!anchor || typeof anchor.x !== 'number' || typeof anchor.y !== 'number') {
+      return service.getConfig()
+    }
+    service.updateSettings({ orbAnchorX: anchor.x, orbAnchorY: anchor.y })
+    pushState()
+    return service.getConfig()
+  })
+
   ipcMain.handle('open-today-log', async () => {
     const logDir = service.getConfig().settings.logDir || getDefaultLogDir()
     const md = getDayMarkdownPath(logDir, localDateKey())
@@ -199,10 +272,23 @@ function setupIpc(): void {
   })
 
   ipcMain.handle('show-context-menu', () => {
+    if (!orbWindow || orbWindow.isDestroyed()) return
+
     const snap = service.snapshot()
     const hasActive = !!(snap.activeSession && !snap.activeSession.endIso)
     const pendingCount = listPending(service.getConfig().settings.logDir).length
     const logExists = snap.todayLogExists
+
+    // Focusable so Escape / click-outside dismiss the native menu reliably
+    orbWindow.setFocusable(true)
+    orbWindow.focus()
+    contextMenuOpen = true
+
+    const restoreFocus = (): void => {
+      contextMenuOpen = false
+      if (!orbWindow || orbWindow.isDestroyed()) return
+      applyMousePolicy(service.snapshot().mode)
+    }
 
     const menu = Menu.buildFromTemplate([
       {
@@ -222,6 +308,21 @@ function setupIpc(): void {
       },
       { type: 'separator' },
       {
+        label: 'Analysis',
+        click: () => {
+          service.openAnalysis()
+          pushState()
+        }
+      },
+      {
+        label: 'Timeline',
+        click: () => {
+          service.openTimeline()
+          pushState()
+        }
+      },
+      { type: 'separator' },
+      {
         label:
           pendingCount > 0
             ? `Pending notes (${pendingCount})`
@@ -229,6 +330,14 @@ function setupIpc(): void {
         enabled: pendingCount > 0,
         click: () => {
           service.openStack()
+          pushState()
+        }
+      },
+      {
+        label: 'Add comment / segment',
+        enabled: hasActive,
+        click: () => {
+          service.insertSegment()
           pushState()
         }
       },
@@ -267,17 +376,27 @@ function setupIpc(): void {
         click: () => app.quit()
       }
     ])
-    menu.popup({ window: orbWindow ?? undefined })
+
+    menu.popup({
+      window: orbWindow,
+      callback: restoreFocus
+    })
   })
 
   ipcMain.on('set-ignore-mouse', (_e, ignore: boolean) => {
     if (!orbWindow || orbWindow.isDestroyed()) return
     const mode = service?.snapshot()?.mode ?? 'idle'
-    // Idle is a tight orb window — never pass-through (avoids the multi-second dead zone)
-    if (mode === 'idle' || mode === 'bubble' || mode === 'settings') {
+    // Focused overlays — never pass-through
+    if (
+      mode === 'bubble' ||
+      mode === 'settings' ||
+      mode === 'analysis' ||
+      mode === 'timeline'
+    ) {
       orbWindow.setIgnoreMouseEvents(false)
       return
     }
+    // idle / wheel / stack — large transparent HWND; pass through empty glass
     if (ignore) {
       orbWindow.setIgnoreMouseEvents(true, { forward: true })
     } else {

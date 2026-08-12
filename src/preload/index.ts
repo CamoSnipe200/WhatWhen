@@ -5,11 +5,14 @@ const api = {
   getState: (): Promise<UiSnapshot> => ipcRenderer.invoke('get-state'),
   switchProfile: (slot: ProfileSlot): Promise<UiSnapshot> =>
     ipcRenderer.invoke('switch-profile', slot),
+  insertSegment: (): Promise<UiSnapshot> => ipcRenderer.invoke('insert-segment'),
   stop: (): Promise<UiSnapshot> => ipcRenderer.invoke('stop'),
   toggleWheel: (): Promise<UiSnapshot> => ipcRenderer.invoke('toggle-wheel'),
   toggleStack: (): Promise<UiSnapshot> => ipcRenderer.invoke('toggle-stack'),
   openStack: (): Promise<UiSnapshot> => ipcRenderer.invoke('open-stack'),
   openSettings: (): Promise<UiSnapshot> => ipcRenderer.invoke('open-settings'),
+  openAnalysis: (): Promise<UiSnapshot> => ipcRenderer.invoke('open-analysis'),
+  openTimeline: (): Promise<UiSnapshot> => ipcRenderer.invoke('open-timeline'),
   openBubble: (sessionId: string): Promise<UiSnapshot> =>
     ipcRenderer.invoke('open-bubble', sessionId),
   saveNotes: (sessionId: string, notes: string): Promise<UiSnapshot> =>
@@ -25,6 +28,10 @@ const api = {
   getConfig: (): Promise<AppConfig> => ipcRenderer.invoke('get-config'),
   setSettings: (partial: Record<string, unknown>): Promise<AppConfig> =>
     ipcRenderer.invoke('set-settings', partial),
+  dragOrb: (dx: number, dy: number): Promise<{ x: number; y: number }> =>
+    ipcRenderer.invoke('drag-orb', dx, dy),
+  endOrbDrag: (anchor: { x: number; y: number }): Promise<AppConfig> =>
+    ipcRenderer.invoke('end-orb-drag', anchor),
   openTodayLog: (): Promise<void> => ipcRenderer.invoke('open-today-log'),
   openLogFolder: (): Promise<void> => ipcRenderer.invoke('open-log-folder'),
   showContextMenu: (): Promise<void> => ipcRenderer.invoke('show-context-menu'),
