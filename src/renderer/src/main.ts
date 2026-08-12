@@ -197,9 +197,8 @@ function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
     timelineTrack.innerHTML = ''
   }
 
-  // Orb stays visible for orb-anchored modes; hide for centered overlays
-  const overlayMode = nextMode === 'analysis' || nextMode === 'timeline'
-  orb.hidden = overlayMode
+  // Keep the orb available while centered Analysis / Timeline overlays are open.
+  orb.hidden = false
 }
 
 function stripNativeTips(root: ParentNode = document): void {
@@ -356,12 +355,11 @@ function renderStack(pending: Session[]): void {
   const visible =
     pending.length > MAX_VISIBLE ? pending.slice(pending.length - MAX_VISIBLE) : pending
 
-  visible.forEach((session, i) => {
+  visible.forEach((session) => {
     const dot = document.createElement('button')
     dot.type = 'button'
     dot.className = 'stack-dot'
     dot.style.setProperty('--dot-color', session.profileColor)
-    dot.style.animationDelay = `${i * 40}ms`
     dot.addEventListener('click', (e) => {
       e.stopPropagation()
       void window.whatwhen.openBubble(session.id)
@@ -478,7 +476,7 @@ function renderAnalysis(analysis: DayAnalysis | null): void {
 
   const summary = document.createElement('div')
   summary.className = 'analysis-summary'
-  summary.textContent = `Tracked ${formatDuration(analysis.trackedMs)} (${analysis.trackedPercent.toFixed(0)}%) · Untracked ${formatDuration(analysis.untrackedMs)} (${analysis.untrackedPercent.toFixed(0)}%)`
+  summary.textContent = `Recorded ${formatDuration(analysis.trackedMs)}`
   analysisBody.appendChild(summary)
 
   const charts = document.createElement('div')
@@ -509,13 +507,13 @@ function renderAnalysis(analysis: DayAnalysis | null): void {
     track.className = 'bar-track'
     const fill = document.createElement('div')
     fill.className = 'bar-fill'
-    fill.style.width = `${Math.max(2, slice.percentOfDay)}%`
+    fill.style.width = `${Math.max(2, slice.percentOfTracked)}%`
     fill.style.background = slice.profileColor
     track.appendChild(fill)
 
     const pct = document.createElement('div')
     pct.className = 'bar-pct'
-    pct.textContent = `${slice.percentOfDay.toFixed(0)}%`
+    pct.textContent = `${slice.percentOfTracked.toFixed(0)}%`
 
     row.append(label, track, pct)
 
@@ -563,7 +561,7 @@ function buildPieSvg(analysis: DayAnalysis): SVGSVGElement {
   svg.classList.add('pie-chart')
 
   let angle = -Math.PI / 2
-  const total = analysis.dayMs || 1
+  const total = analysis.trackedMs || 1
 
   for (const slice of analysis.slices) {
     const sweep = (slice.durationMs / total) * Math.PI * 2
@@ -580,7 +578,7 @@ function buildPieSvg(analysis: DayAnalysis): SVGSVGElement {
       `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`
     )
     path.setAttribute('fill', slice.profileColor)
-    path.setAttribute('opacity', slice.profileSlot === null ? '0.45' : '0.88')
+    path.setAttribute('opacity', '0.88')
     path.setAttribute('stroke', 'rgba(0,0,0,0.25)')
     path.setAttribute('stroke-width', '1')
 

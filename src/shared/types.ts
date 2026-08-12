@@ -231,18 +231,6 @@ export function computeDayAnalysis(
       notes: a.notes
     }))
 
-  if (untrackedMs > 0) {
-    slices.push({
-      profileSlot: null,
-      profileName: 'Untracked',
-      profileColor: '#6b7280',
-      durationMs: untrackedMs,
-      percentOfDay: (untrackedMs / dayMs) * 100,
-      percentOfTracked: 0,
-      notes: []
-    })
-  }
-
   return {
     date: log.date,
     dayStartIso: start.toISOString(),

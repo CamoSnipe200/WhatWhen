@@ -22,12 +22,14 @@ export interface OrbAnchor {
 }
 
 /**
- * Idle and wheel share the same HWND size. Resizing a bottom-right-anchored
- * transparent window on Windows briefly applies the new (x,y) with the old
- * size (or vice versa), which flashes a ghost copy of the UI up/left of the
- * orb. Keep bounds stable and toggle content + mouse pass-through instead.
+ * Idle, wheel, pending stack, and note bubble share stable minimum HWND
+ * bounds. Resizing a bottom-right-anchored transparent window on Windows
+ * briefly applies the new (x,y) with the old renderer viewport, which flashes
+ * the previous UI up/left of the orb. Keep bounds stable across those common
+ * transitions and toggle content + mouse pass-through instead.
  *
- * Stack / bubble / settings / overlays still use their own sizes.
+ * Large pending stacks may increase only the shared stack/bubble height.
+ * Settings and centered overlays still use their own sizes.
  */
 export function computeLayout(
   mode: UiMode,
@@ -37,12 +39,16 @@ export function computeLayout(
   if (mode === 'idle' || mode === 'wheel') {
     return { width: WHEEL_W, height: WHEEL_H }
   }
-  if (mode === 'stack') {
+  if (mode === 'stack' || mode === 'bubble') {
     const n = Math.min(Math.max(pendingCount, 1), MAX_STACK)
     const stackH = n * (STACK_DOT + STACK_GAP) + 12
     return {
-      width: Math.max(orbSize + 28, 80),
-      height: orbSize + stackH + 24
+      width: Math.max(WHEEL_W, BUBBLE_W + 16, orbSize + 28),
+      height: Math.max(
+        WHEEL_H,
+        orbSize + stackH + 24,
+        orbSize + BUBBLE_H + 28
+      )
     }
   }
   if (mode === 'settings') {
@@ -51,10 +57,7 @@ export function computeLayout(
   if (mode === 'analysis' || mode === 'timeline') {
     return { width: OVERLAY_W, height: OVERLAY_H }
   }
-  return {
-    width: Math.max(BUBBLE_W + 16, orbSize + 24),
-    height: orbSize + BUBBLE_H + 28
-  }
+  return { width: WHEEL_W, height: WHEEL_H }
 }
 
 export function defaultAnchor(margin = MARGIN): OrbAnchor {

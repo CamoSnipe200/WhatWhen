@@ -171,30 +171,23 @@ function renderMarkdown(log: DayLog): string {
 
   const analysis = computeDayAnalysis(log)
   lines.push('## Analysis', '')
-  lines.push(
-    `- Tracked: ${formatDuration(analysis.trackedMs)} (${pct(analysis.trackedPercent)} of day)`
-  )
-  lines.push(
-    `- Untracked: ${formatDuration(analysis.untrackedMs)} (${pct(analysis.untrackedPercent)} of day)`
-  )
+  lines.push(`- Recorded: ${formatDuration(analysis.trackedMs)}`)
   lines.push('')
 
   if (analysis.slices.length === 0) {
     lines.push('_No tracked time yet._', '')
   } else {
-    lines.push('| Where | Duration | % of day | % of tracked |')
-    lines.push('| --- | --- | --- | --- |')
+    lines.push('| Where | Duration | % of recorded |')
+    lines.push('| --- | --- | --- |')
     for (const slice of analysis.slices) {
-      const trackedCol =
-        slice.profileSlot === null ? '—' : pct(slice.percentOfTracked)
       lines.push(
-        `| ${slice.profileName} | ${formatDuration(slice.durationMs)} | ${pct(slice.percentOfDay)} | ${trackedCol} |`
+        `| ${slice.profileName} | ${formatDuration(slice.durationMs)} | ${pct(slice.percentOfTracked)} |`
       )
     }
     lines.push('')
 
     for (const slice of analysis.slices) {
-      if (slice.profileSlot === null || slice.notes.length === 0) continue
+      if (slice.notes.length === 0) continue
       lines.push(`### Notes — ${slice.profileName}`, '')
       for (const note of slice.notes) {
         lines.push(`- ${note}`)
