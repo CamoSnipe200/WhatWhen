@@ -61,7 +61,7 @@ export function loadConfig(): AppConfig {
 function mergeProfiles(saved?: Profile[]): Profile[] {
   const defaults = defaultProfiles()
   if (!saved?.length) return defaults
-  // Only keep the six active slots; preserve custom names/colors when present
+  // Keep the active slots; preserve custom names/colors when present
   return defaults.map((d) => {
     const found = saved.find((p) => p.slot === d.slot)
     return found

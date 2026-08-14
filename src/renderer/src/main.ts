@@ -7,6 +7,7 @@ import type {
   UiSnapshot
 } from '../../shared/types'
 import { SLOT_DISPLAY, formatDuration, formatTimeLocal } from '../../shared/types'
+import { placeOnArc, type RadialArc } from './radial-arc'
 
 const MAX_VISIBLE = 7
 
@@ -32,12 +33,15 @@ const analysisClose = document.getElementById('analysis-close') as HTMLButtonEle
 const timelineEl = document.getElementById('timeline') as HTMLDivElement
 const timelineTrack = document.getElementById('timeline-track') as HTMLDivElement
 const timelineHover = document.getElementById('timeline-hover') as HTMLDivElement
+const timelineInspector = document.getElementById('timeline-inspector') as HTMLDivElement
 const timelineClose = document.getElementById('timeline-close') as HTMLButtonElement
 
 let state: UiSnapshot | null = null
 let editingId: string | null = null
 let draftProfiles: Profile[] | null = null
 let wheelBuilt = false
+let selectedTimelineId: string | null = null
+let splitAtIso: string | null = null
 
 /** Orb drag state */
 let dragging = false
@@ -119,6 +123,9 @@ function applyState(snap: UiSnapshot): void {
 
   if (!modeChanged && snap.mode === 'wheel' && wheelBuilt && !profilesChanged) {
     updateWheelActive(snap)
+    const prevPending = prev?.pending.map((p) => p.id).join('|')
+    const nextPending = snap.pending.map((p) => p.id).join('|')
+    if (prevPending !== nextPending) renderPendingOnWheel(snap.pending)
     return
   }
 
@@ -146,9 +153,13 @@ function applyState(snap: UiSnapshot): void {
   if (!modeChanged && snap.mode === 'timeline') {
     const prevN = prev?.todaySessions?.length
     const nextN = snap.todaySessions?.length
-    const prevEnd = prev?.todaySessions?.map((s) => s.endIso).join('|')
-    const nextEnd = snap.todaySessions.map((s) => s.endIso).join('|')
-    if (prevN !== nextN || prevEnd !== nextEnd) {
+    const prevSig = prev?.todaySessions
+      ?.map((s) => `${s.id}:${s.startIso}:${s.endIso}:${s.profileSlot}:${s.profileColor}`)
+      .join('|')
+    const nextSig = snap.todaySessions
+      .map((s) => `${s.id}:${s.startIso}:${s.endIso}:${s.profileSlot}:${s.profileColor}`)
+      .join('|')
+    if (prevN !== nextN || prevSig !== nextSig) {
       renderTimeline(snap.todaySessions)
     }
     return
@@ -160,7 +171,9 @@ function applyState(snap: UiSnapshot): void {
 
   if (snap.mode === 'wheel') {
     renderWheel(snap)
+    renderPendingOnWheel(snap.pending)
   } else if (snap.mode === 'stack') {
+    stackEl.classList.remove('above-wheel')
     renderStack(snap.pending)
   } else if (snap.mode === 'bubble' && snap.bubbleSession) {
     showBubble(snap.bubbleSession, snap.bubbleFromBacklog)
@@ -182,9 +195,10 @@ function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
   } else {
     wheelEl.classList.remove('is-leaving')
   }
-  if (nextMode !== 'stack') {
+  if (nextMode !== 'stack' && nextMode !== 'wheel') {
     fadeOutChrome(stackEl, () => {
       stackEl.innerHTML = ''
+      stackEl.classList.remove('above-wheel')
     })
   } else {
     stackEl.classList.remove('is-leaving')
@@ -205,7 +219,12 @@ function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
   if (nextMode !== 'timeline') {
     timelineEl.hidden = true
     timelineHover.hidden = true
+    timelineInspector.hidden = true
+    timelineEl.classList.remove('is-inspecting')
     timelineTrack.innerHTML = ''
+    selectedTimelineId = null
+    splitAtIso = null
+    void window.whatwhen.setTimelineEditing(false)
   }
 
   // Keep the orb available while centered Analysis / Timeline overlays are open.
@@ -256,9 +275,8 @@ function renderOrb(snap: UiSnapshot): void {
 }
 
 /**
- * Inner ring: same spacing as before — t = 0, 0.4, 0.8 → 5, 6, ×
- * Outer ring: 1–4 on outer radius, packed into that same angular span
- * (no wide 0…1/3…2/3…1 stretch).
+ * Dual-ring wheel. Each ring is startDeg → endDeg at a radius; items pack
+ * evenly unless spacingDeg is set. 90 = up from the orb, 180 = left of it.
  */
 function renderWheel(snap: UiSnapshot): void {
   wheelEl.hidden = false
@@ -267,20 +285,16 @@ function renderWheel(snap: UiSnapshot): void {
 
   const ORB = 52
   const DOT = 38
-  const half = DOT / 2
-  const originRight = 4 + ORB / 2
-  const originBottom = 4 + ORB / 2
+  const origin = { right: 2 + ORB / 2, bottom: 2 + ORB / 2 }
 
-  const innerR = 82
-  const outerR = innerR + DOT + 4
-  const startDeg = 105
-  const endDeg = 190
-  const span = endDeg - startDeg
-
-  // Inner spacing locked (was 4/5/6, now 5/6/×)
-  const innerTs = [0.0, 0.4, 0.8] as const
-  // Outer 1–4 evenly within that same span (0 → 0.8), not the full fan
-  const outerTs = [0.0, 0.8 / 3, (0.8 * 2) / 3, 0.8] as const
+  // Lowest (~184°) sits on the orb's bottom edge; highest (~96°) hugs the
+  // right/up side of the window. Wider span than 105–173 opens the gaps.
+  const inner: RadialArc = { radius: 82, startDeg: 96, endDeg: 184 }
+  const outer: RadialArc = {
+    radius: inner.radius + DOT + 4,
+    startDeg: 102,
+    endDeg: 176
+  }
 
   const profiles = [...snap.profiles].sort((a, b) => a.slot - b.slot)
   const bySlot = (s: number): Profile =>
@@ -290,18 +304,27 @@ function renderWheel(snap: UiSnapshot): void {
       color: '#888'
     }
 
-  type WheelItem =
-    | { kind: 'profile'; profile: Profile; radius: number; t: number }
-    | { kind: 'stop'; radius: number; t: number }
+  const outerSlots = [1, 2, 3, 4].map(bySlot)
+  const innerSlots = [5, 6, 7]
+  const outerPos = placeOnArc(outerSlots.length, outer, origin, DOT)
+  const innerPos = placeOnArc(innerSlots.length + 1, inner, origin, DOT)
 
-  const items: WheelItem[] = [
-    { kind: 'profile', profile: bySlot(1), radius: outerR, t: outerTs[0] },
-    { kind: 'profile', profile: bySlot(2), radius: outerR, t: outerTs[1] },
-    { kind: 'profile', profile: bySlot(3), radius: outerR, t: outerTs[2] },
-    { kind: 'profile', profile: bySlot(4), radius: outerR, t: outerTs[3] },
-    { kind: 'profile', profile: bySlot(5), radius: innerR, t: innerTs[0] },
-    { kind: 'profile', profile: bySlot(6), radius: innerR, t: innerTs[1] },
-    { kind: 'stop', radius: innerR, t: innerTs[2] }
+  type Placed =
+    | { kind: 'profile'; profile: Profile; pos: (typeof outerPos)[number] }
+    | { kind: 'stop'; pos: (typeof innerPos)[number] }
+
+  const items: Placed[] = [
+    ...outerSlots.map((profile, i) => ({
+      kind: 'profile' as const,
+      profile,
+      pos: outerPos[i]
+    })),
+    ...innerSlots.map((slot, i) => ({
+      kind: 'profile' as const,
+      profile: bySlot(slot),
+      pos: innerPos[i]
+    })),
+    { kind: 'stop', pos: innerPos[innerSlots.length] }
   ]
 
   const activeSlot = snap.activeSession?.endIso
@@ -309,18 +332,13 @@ function renderWheel(snap: UiSnapshot): void {
     : snap.activeSession?.profileSlot
 
   items.forEach((item, i) => {
-    const deg = startDeg + item.t * span
-    const rad = (deg * Math.PI) / 180
-    const right = originRight - Math.cos(rad) * item.radius - half
-    const bottom = originBottom + Math.sin(rad) * item.radius - half
-
     const btn = document.createElement('button')
     btn.type = 'button'
     btn.className = 'wheel-dot'
     btn.style.width = `${DOT}px`
     btn.style.height = `${DOT}px`
-    btn.style.right = `${right}px`
-    btn.style.bottom = `${bottom}px`
+    btn.style.right = `${item.pos.right}px`
+    btn.style.bottom = `${item.pos.bottom}px`
     btn.style.left = 'auto'
     btn.style.top = 'auto'
     btn.style.animationDelay = `${i * 28}ms`
@@ -368,12 +386,24 @@ function updateWheelActive(snap: UiSnapshot): void {
   })
 }
 
-function renderStack(pending: Session[]): void {
+function renderPendingOnWheel(pending: Session[]): void {
+  if (pending.length === 0) {
+    stackEl.classList.remove('above-wheel')
+    stackEl.hidden = true
+    stackEl.innerHTML = ''
+    return
+  }
+  stackEl.classList.add('above-wheel')
+  renderStack(pending, { allowEmpty: true })
+}
+
+function renderStack(pending: Session[], opts?: { allowEmpty?: boolean }): void {
   stackEl.hidden = false
   stackEl.innerHTML = ''
 
   if (pending.length === 0) {
-    void window.whatwhen.closeUi()
+    stackEl.hidden = true
+    if (!opts?.allowEmpty) void window.whatwhen.closeUi()
     return
   }
 
@@ -644,11 +674,42 @@ function showTimeline(sessions: Session[]): void {
   renderTimeline(sessions)
 }
 
+function formatTimeInput(iso: string): string {
+  const d = new Date(iso)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function withTimeOfDay(iso: string, hhmm: string): string {
+  const d = new Date(iso)
+  const [h, m] = hhmm.split(':').map((n) => Number(n))
+  d.setHours(Number.isFinite(h) ? h : 0, Number.isFinite(m) ? m : 0, 0, 0)
+  return d.toISOString()
+}
+
+function sessionMidIso(session: Session): string {
+  const start = new Date(session.startIso).getTime()
+  const end = session.endIso ? new Date(session.endIso).getTime() : Date.now()
+  return new Date(start + (end - start) / 2).toISOString()
+}
+
+function setSelectedTimeline(id: string | null, atIso?: string | null): void {
+  selectedTimelineId = id
+  if (atIso !== undefined) splitAtIso = atIso
+  else if (!id) splitAtIso = null
+  timelineEl.classList.toggle('is-inspecting', !!id)
+  void window.whatwhen.setTimelineEditing(!!id)
+}
+
 function renderTimeline(sessions: Session[]): void {
   timelineTrack.innerHTML = ''
   timelineHover.hidden = true
 
+  if (selectedTimelineId && !sessions.some((s) => s.id === selectedTimelineId)) {
+    setSelectedTimeline(null)
+  }
+
   if (sessions.length === 0) {
+    timelineInspector.hidden = true
     const empty = document.createElement('div')
     empty.className = 'overlay-empty'
     empty.textContent = 'No sessions yet today.'
@@ -671,6 +732,8 @@ function renderTimeline(sessions: Session[]): void {
     const bubble = document.createElement('button')
     bubble.type = 'button'
     bubble.className = 'timeline-bubble'
+    bubble.dataset.sessionId = session.id
+    if (session.id === selectedTimelineId) bubble.classList.add('selected')
     // Flex distributes the complete track among recorded sessions. The
     // remaining width after small visual gaps is exactly duration-proportional.
     bubble.style.flexGrow = String(durationMs)
@@ -680,14 +743,22 @@ function renderTimeline(sessions: Session[]): void {
 
     const bar = document.createElement('span')
     bar.className = 'timeline-bar'
+    bubble.append(bar)
 
-    const label = document.createElement('span')
-    label.className = 'timeline-label'
-    label.style.top = `${48 + (i % 3) * 52}px`
-    label.textContent = `${formatTimeLocal(session.startIso)} · ${session.profileName}`
-    bubble.append(bar, label)
+    if (session.id === selectedTimelineId && splitAtIso) {
+      const start = new Date(session.startIso).getTime()
+      const end = session.endIso ? new Date(session.endIso).getTime() : now
+      const at = new Date(splitAtIso).getTime()
+      if (at > start && at < end) {
+        const mark = document.createElement('span')
+        mark.className = 'timeline-split-mark'
+        mark.style.left = `${((at - start) / (end - start)) * 100}%`
+        bubble.appendChild(mark)
+      }
+    }
 
     bubble.addEventListener('mouseenter', () => {
+      if (selectedTimelineId) return
       timelineHover.hidden = false
       const note = session.notes.trim()
         ? session.notes.trim()
@@ -707,11 +778,118 @@ function renderTimeline(sessions: Session[]): void {
       timelineHover.append(h, body)
     })
     bubble.addEventListener('mouseleave', () => {
+      if (selectedTimelineId) return
       timelineHover.hidden = true
+    })
+
+    bubble.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (selectedTimelineId === session.id) {
+        const rect = bubble.getBoundingClientRect()
+        const t = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+        const start = new Date(session.startIso).getTime()
+        const end = session.endIso ? new Date(session.endIso).getTime() : Date.now()
+        const at = new Date(start + t * (end - start)).toISOString()
+        setSelectedTimeline(session.id, at)
+        renderTimeline(sessions)
+        return
+      }
+      setSelectedTimeline(session.id, sessionMidIso(session))
+      timelineHover.hidden = true
+      renderTimeline(sessions)
     })
 
     timelineTrack.appendChild(bubble)
   })
+
+  const selected = sessions.find((s) => s.id === selectedTimelineId) ?? null
+  if (selected) {
+    renderTimelineInspector(selected)
+  } else {
+    timelineInspector.hidden = true
+    timelineInspector.innerHTML = ''
+  }
+}
+
+function renderTimelineInspector(session: Session): void {
+  timelineInspector.hidden = false
+  timelineInspector.innerHTML = ''
+  const live = !session.endIso
+  const splitValue = splitAtIso ?? sessionMidIso(session)
+
+  const times = document.createElement('div')
+  times.className = 'timeline-inspector-row'
+
+  const startWrap = document.createElement('label')
+  startWrap.className = 'timeline-inspector-field'
+  startWrap.textContent = 'Start'
+  const startInput = document.createElement('input')
+  startInput.type = 'time'
+  startInput.value = formatTimeInput(session.startIso)
+  startInput.addEventListener('change', () => {
+    const nextStart = withTimeOfDay(session.startIso, startInput.value)
+    void window.whatwhen.updateSessionTimes(session.id, nextStart, session.endIso)
+  })
+  startWrap.appendChild(startInput)
+
+  const endWrap = document.createElement('label')
+  endWrap.className = 'timeline-inspector-field'
+  endWrap.textContent = 'End'
+  const endInput = document.createElement('input')
+  endInput.type = 'time'
+  endInput.disabled = live
+  endInput.value = formatTimeInput(session.endIso ?? new Date().toISOString())
+  endInput.addEventListener('change', () => {
+    if (live || !session.endIso) return
+    const nextEnd = withTimeOfDay(session.endIso, endInput.value)
+    void window.whatwhen.updateSessionTimes(session.id, session.startIso, nextEnd)
+  })
+  endWrap.appendChild(endInput)
+  times.append(startWrap, endWrap)
+
+  const chips = document.createElement('div')
+  chips.className = 'timeline-inspector-chips'
+  const profiles = state?.profiles ?? []
+  for (const profile of [...profiles].sort((a, b) => a.slot - b.slot)) {
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = 'timeline-chip'
+    chip.style.setProperty('--c', profile.color)
+    chip.textContent = SLOT_DISPLAY[profile.slot]
+    if (profile.slot === session.profileSlot) chip.classList.add('active')
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation()
+      void window.whatwhen.reassignSession(session.id, profile.slot)
+    })
+    chips.appendChild(chip)
+  }
+
+  const splitRow = document.createElement('div')
+  splitRow.className = 'timeline-inspector-row'
+  const splitWrap = document.createElement('label')
+  splitWrap.className = 'timeline-inspector-field'
+  splitWrap.textContent = 'Split at'
+  const splitInput = document.createElement('input')
+  splitInput.type = 'time'
+  splitInput.value = formatTimeInput(splitValue)
+  splitInput.addEventListener('change', () => {
+    splitAtIso = withTimeOfDay(session.startIso, splitInput.value)
+    if (state) renderTimeline(state.todaySessions)
+  })
+  splitWrap.appendChild(splitInput)
+  const splitBtn = document.createElement('button')
+  splitBtn.type = 'button'
+  splitBtn.className = 'btn-primary timeline-split-btn'
+  splitBtn.textContent = 'Split'
+  splitBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const at = splitAtIso ?? withTimeOfDay(session.startIso, splitInput.value)
+    splitAtIso = null
+    void window.whatwhen.splitSession(session.id, at)
+  })
+  splitRow.append(splitWrap, splitBtn)
+
+  timelineInspector.append(times, chips, splitRow)
 }
 
 /**
@@ -818,6 +996,21 @@ timelineClose.addEventListener('click', () => {
   void window.whatwhen.closeUi()
 })
 
+timelineEl.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement
+  if (
+    t.closest('.timeline-bubble') ||
+    t.closest('.timeline-inspector') ||
+    t.closest('.overlay-close')
+  ) {
+    return
+  }
+  if (selectedTimelineId && state) {
+    setSelectedTimeline(null)
+    renderTimeline(state.todaySessions)
+  }
+})
+
 /** Release Chromium focus before main demotes the transparent HWND. */
 function blurBubbleInput(): void {
   bubbleInput.blur()
@@ -892,6 +1085,11 @@ window.addEventListener('keydown', (e) => {
     state.mode === 'analysis' ||
     state.mode === 'timeline'
   ) {
+    if (state.mode === 'timeline' && selectedTimelineId) {
+      setSelectedTimeline(null)
+      renderTimeline(state.todaySessions)
+      return
+    }
     void window.whatwhen.closeUi()
   } else if (state.mode === 'settings') {
     void saveSettingsAndClose()
@@ -912,6 +1110,11 @@ async function boot(): Promise<void> {
   const snap = await window.whatwhen.getState()
   applyState(snap)
   window.whatwhen.onStateChanged(applyState)
+  window.whatwhen.onOverlayRevealed(() => {
+    if (state?.mode === 'bubble') {
+      requestAnimationFrame(() => bubbleInput.focus())
+    }
+  })
 }
 
 void boot()

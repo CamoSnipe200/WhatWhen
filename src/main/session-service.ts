@@ -7,6 +7,7 @@ import {
   Session,
   UiSnapshot,
   computeDayAnalysis,
+  dayStart,
   formatDuration,
   localDateKey
 } from '../shared/types'
@@ -427,5 +428,157 @@ export class SessionService {
     if (!this.active) return ''
     const ms = Date.now() - new Date(this.active.startIso).getTime()
     return formatDuration(ms)
+  }
+
+  private listedToday(): Session[] {
+    const logDir = this.config.settings.logDir
+    const dayLog = loadDayLog(logDir)
+    const sessions = [...dayLog.sessions]
+    if (this.active && !this.active.endIso) {
+      const idx = sessions.findIndex((s) => s.id === this.active!.id)
+      if (idx >= 0) sessions[idx] = this.active
+      else sessions.push(this.active)
+    }
+    return sessions.sort(
+      (a, b) => new Date(a.startIso).getTime() - new Date(b.startIso).getTime()
+    )
+  }
+
+  /**
+   * Edit a recorded session's time window. Clamps to the same local day and
+   * neighboring sessions so ranges cannot overlap. Live sessions can change
+   * start only.
+   */
+  updateSessionTimes(
+    id: string,
+    startIso: string,
+    endIso: string | null
+  ): UiSnapshot {
+    const sessions = this.listedToday()
+    const idx = sessions.findIndex((s) => s.id === id)
+    if (idx < 0) return this.snapshot()
+
+    const current = sessions[idx]
+    const isLive = !!(this.active?.id === id && !this.active.endIso)
+    const origin = new Date(current.startIso)
+    const day0 = dayStart(origin).getTime()
+    const dayClose = new Date(origin)
+    dayClose.setHours(23, 59, 59, 999)
+    const now = Date.now()
+    const isToday = localDateKey(origin) === localDateKey()
+    const maxDayEnd = isToday ? now : dayClose.getTime()
+
+    const prev = idx > 0 ? sessions[idx - 1] : null
+    const next = idx < sessions.length - 1 ? sessions[idx + 1] : null
+    const minStart = prev
+      ? new Date(prev.endIso ?? prev.startIso).getTime()
+      : day0
+
+    let startMs = new Date(startIso).getTime()
+    if (Number.isNaN(startMs)) return this.snapshot()
+    startMs = Math.max(minStart, Math.min(startMs, dayClose.getTime()))
+    startMs = Math.max(day0, startMs)
+
+    if (isLive) {
+      startMs = Math.min(startMs, now - 1000)
+      if (startMs >= now) return this.snapshot()
+      const updated: Session = {
+        ...current,
+        startIso: new Date(startMs).toISOString(),
+        endIso: null
+      }
+      this.active = updated
+      saveRuntime({ activeSession: updated })
+      upsertSession(this.config.settings.logDir, updated)
+      this.emit()
+      return this.snapshot()
+    }
+
+    const maxEnd = next ? new Date(next.startIso).getTime() : maxDayEnd
+    let endMs = endIso
+      ? new Date(endIso).getTime()
+      : current.endIso
+        ? new Date(current.endIso).getTime()
+        : maxEnd
+    if (Number.isNaN(endMs)) return this.snapshot()
+    endMs = Math.min(maxEnd, Math.max(endMs, startMs + 1000))
+    endMs = Math.min(endMs, maxDayEnd)
+    if (startMs >= endMs) return this.snapshot()
+
+    const updated: Session = {
+      ...current,
+      startIso: new Date(startMs).toISOString(),
+      endIso: new Date(endMs).toISOString()
+    }
+    upsertSession(this.config.settings.logDir, updated)
+    this.emit()
+    return this.snapshot()
+  }
+
+  reassignSession(id: string, slot: ProfileSlot): UiSnapshot {
+    const profile = this.getProfile(slot)
+    const patch = {
+      profileSlot: slot,
+      profileName: profile.name,
+      profileColor: profile.color
+    }
+
+    if (this.active?.id === id && !this.active.endIso) {
+      this.active = { ...this.active, ...patch }
+      saveRuntime({ activeSession: this.active })
+      upsertSession(this.config.settings.logDir, this.active)
+      this.emit()
+      return this.snapshot()
+    }
+
+    const log = loadDayLog(this.config.settings.logDir)
+    const session = log.sessions.find((s) => s.id === id)
+    if (!session) return this.snapshot()
+    upsertSession(this.config.settings.logDir, { ...session, ...patch })
+    this.emit()
+    return this.snapshot()
+  }
+
+  /**
+   * Split at atIso. First half keeps original start + notes; second half is a
+   * new id with empty pending notes. Splitting the live session leaves the
+   * second half running from atIso.
+   */
+  splitSession(id: string, atIso: string): UiSnapshot {
+    const at = new Date(atIso).getTime()
+    if (Number.isNaN(at)) return this.snapshot()
+
+    const sessions = this.listedToday()
+    const current = sessions.find((s) => s.id === id)
+    if (!current) return this.snapshot()
+
+    const start = new Date(current.startIso).getTime()
+    const isLive = !!(this.active?.id === id && !this.active.endIso)
+    const end = current.endIso ? new Date(current.endIso).getTime() : Date.now()
+    if (at <= start + 1000 || at >= end - 1000) return this.snapshot()
+
+    const first: Session = {
+      ...current,
+      endIso: new Date(at).toISOString()
+    }
+    const second: Session = {
+      id: randomUUID(),
+      profileSlot: current.profileSlot,
+      profileName: current.profileName,
+      profileColor: current.profileColor,
+      startIso: new Date(at).toISOString(),
+      endIso: isLive ? null : current.endIso,
+      notes: '',
+      notesStatus: 'pending'
+    }
+
+    upsertSession(this.config.settings.logDir, first)
+    if (isLive) {
+      this.active = second
+      saveRuntime({ activeSession: second })
+    }
+    upsertSession(this.config.settings.logDir, second)
+    this.emit()
+    return this.snapshot()
   }
 }

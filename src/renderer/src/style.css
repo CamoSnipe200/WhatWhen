@@ -338,6 +338,11 @@ body {
   display: none !important;
 }
 
+.stack.above-wheel {
+  /* Sit above the outer category ring so pending dots don't cover 5/6/7/× */
+  bottom: calc(var(--orb) + 126px);
+}
+
 .stack.is-leaving {
   pointer-events: none;
   opacity: 0;
@@ -481,7 +486,7 @@ body {
   right: 4px;
   bottom: calc(var(--orb) + 12px);
   width: 300px;
-  max-height: 400px;
+  max-height: 440px;
   pointer-events: auto;
   animation: bubble-in 0.2s ease;
 }
@@ -501,7 +506,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 400px;
+  max-height: 440px;
 }
 
 .settings-list {
@@ -509,7 +514,7 @@ body {
   flex-direction: column;
   gap: 8px;
   overflow-y: auto;
-  max-height: 320px;
+  max-height: 360px;
   padding-right: 2px;
 }
 
@@ -788,7 +793,7 @@ body {
   align-items: flex-start;
   gap: 4px;
   width: calc(100% - 32px);
-  height: 245px;
+  height: 80px;
   min-width: 0;
   margin: 0 16px;
 }
@@ -806,12 +811,12 @@ body {
 .timeline-bubble {
   position: relative;
   top: 20px;
-  height: 215px;
+  height: 54px;
   min-width: 2px;
   border: none;
   background: transparent;
   padding: 0;
-  cursor: default;
+  cursor: pointer;
   animation: timeline-in 0.18s ease forwards;
   opacity: 0;
   color: var(--text);
@@ -829,32 +834,27 @@ body {
   pointer-events: none;
 }
 
-.timeline-bubble:hover .timeline-bar {
-  border-color: rgba(255, 255, 255, 0.65);
+.timeline-bubble.selected .timeline-bar {
+  border-color: rgba(255, 255, 255, 0.85);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.28),
+    0 0 0 2px color-mix(in srgb, var(--c, #fff) 45%, transparent);
+}
+
+.timeline-split-mark {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 34px;
+  background: rgba(255, 255, 255, 0.92);
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 3;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
 .timeline-bubble:hover {
   z-index: 2;
-}
-
-.timeline-label {
-  position: absolute;
-  top: 46px;
-  left: 50%;
-  display: block;
-  max-width: 155px;
-  overflow: hidden;
-  color: rgba(255, 255, 255, 0.76);
-  font-size: 10px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  /* Counter-clockwise so text reads upward from the rail */
-  transform: translateX(-50%) rotate(-90deg);
-  transform-origin: center top;
-  pointer-events: none;
 }
 
 @keyframes timeline-in {
@@ -885,4 +885,95 @@ body {
   font-size: 12px;
   color: var(--muted);
   white-space: pre-wrap;
+}
+
+.timeline-inspector {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 8px;
+}
+
+.timeline-inspector[hidden] {
+  display: none !important;
+}
+
+.timeline-inspector-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.timeline-inspector-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.timeline-inspector-field input[type='time'] {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  padding: 5px 8px;
+  outline: none;
+  color-scheme: dark;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.timeline-inspector-field input[type='time']:disabled {
+  opacity: 0.45;
+}
+
+.timeline-inspector-field input[type='time']:focus {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.timeline-inspector-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.timeline-chip {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.92);
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.28) 0%,
+      rgba(255, 255, 255, 0.04) 100%
+    ),
+    color-mix(in srgb, var(--c, #888) 55%, transparent);
+}
+
+.timeline-chip:hover {
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+.timeline-chip.active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--c, #fff) 55%, transparent);
+  border-color: rgba(255, 255, 255, 0.8);
+}
+
+.timeline-split-btn {
+  margin-left: auto;
+  margin-right: 56px;
 }

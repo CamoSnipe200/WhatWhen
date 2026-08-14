@@ -25,6 +25,18 @@ const api = {
   closeUi: (): Promise<UiSnapshot> => ipcRenderer.invoke('close-ui'),
   updateProfiles: (profiles: Profile[]): Promise<UiSnapshot> =>
     ipcRenderer.invoke('update-profiles', profiles),
+  updateSessionTimes: (
+    id: string,
+    startIso: string,
+    endIso: string | null
+  ): Promise<UiSnapshot> =>
+    ipcRenderer.invoke('update-session-times', id, startIso, endIso),
+  reassignSession: (id: string, slot: ProfileSlot): Promise<UiSnapshot> =>
+    ipcRenderer.invoke('reassign-session', id, slot),
+  splitSession: (id: string, atIso: string): Promise<UiSnapshot> =>
+    ipcRenderer.invoke('split-session', id, atIso),
+  setTimelineEditing: (editing: boolean): Promise<void> =>
+    ipcRenderer.invoke('set-timeline-editing', editing),
   getConfig: (): Promise<AppConfig> => ipcRenderer.invoke('get-config'),
   setSettings: (partial: Record<string, unknown>): Promise<AppConfig> =>
     ipcRenderer.invoke('set-settings', partial),
@@ -42,6 +54,11 @@ const api = {
     const handler = (_: Electron.IpcRendererEvent, snap: UiSnapshot): void => cb(snap)
     ipcRenderer.on('state-changed', handler)
     return () => ipcRenderer.removeListener('state-changed', handler)
+  },
+  onOverlayRevealed: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('overlay-revealed', handler)
+    return () => ipcRenderer.removeListener('overlay-revealed', handler)
   }
 }
 

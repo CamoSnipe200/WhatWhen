@@ -43,6 +43,15 @@ let contextMenuOpen = false
 let boundsRevealTimer: ReturnType<typeof setTimeout> | null = null
 let opacityFadeTimer: ReturnType<typeof setInterval> | null = null
 let overlayEscapeRegistered = false
+/** Timeline inspector is open and needs keyboard for time fields. */
+let timelineEditing = false
+let lastWheelToggleAt = 0
+let idleLeftDown: { x: number; y: number } | null = null
+
+const WM_LBUTTONDOWN = 0x0201
+const WM_LBUTTONUP = 0x0202
+const IDLE_CLICK_DRAG_PX = 4
+const WHEEL_TOGGLE_DEBOUNCE_MS = 400
 
 function getAnchor(): OrbAnchor {
   const s = service.getConfig().settings
@@ -87,17 +96,25 @@ function clearTransparentFocus(win: BrowserWindow): void {
   win.showInactive()
 }
 
+function needsKeyboard(mode: string | null): boolean {
+  return (
+    mode === 'bubble' ||
+    mode === 'settings' ||
+    (mode === 'timeline' && timelineEditing)
+  )
+}
+
 /**
  * Idle is an orb-tight HWND (no empty glass). Wheel/stack keep a larger
  * transparent surface with pass-through on empty glass; the renderer
  * re-enables hit-testing when the cursor is over interactive UI.
- * Focused overlays (bubble/settings) capture all clicks; analysis/timeline
- * capture clicks but stay non-focusable.
+ * Focused overlays (bubble/settings, timeline inspector) capture all clicks;
+ * analysis/timeline otherwise capture clicks but stay non-focusable.
  */
 function applyMousePolicy(mode: string): void {
   if (!orbWindow || orbWindow.isDestroyed()) return
 
-  if (mode === 'bubble' || mode === 'settings') {
+  if (needsKeyboard(mode)) {
     setOverlayEscape(false)
     orbWindow.setFocusable(true)
     orbWindow.setIgnoreMouseEvents(false)
@@ -135,11 +152,19 @@ function clearRevealTimers(): void {
   opacityFadeTimer = null
 }
 
-function fadeInWindow(win: BrowserWindow, durationMs = 100): void {
+function fadeInWindow(win: BrowserWindow, durationMs = 100, mode?: string): void {
+  const snapMode = mode ?? service.snapshot().mode
+  const keepFocus = needsKeyboard(snapMode)
   const startedAt = Date.now()
   win.setOpacity(0)
-  clearTransparentFocus(win)
-  win.showInactive()
+  if (keepFocus) {
+    win.setFocusable(true)
+    win.show()
+    win.focus()
+  } else {
+    clearTransparentFocus(win)
+    win.showInactive()
+  }
 
   opacityFadeTimer = setInterval(() => {
     if (win.isDestroyed()) {
@@ -152,9 +177,14 @@ function fadeInWindow(win: BrowserWindow, durationMs = 100): void {
       if (opacityFadeTimer) clearInterval(opacityFadeTimer)
       opacityFadeTimer = null
       win.setOpacity(1)
-      // Reaffirm inactive after the fade — clicks that closed the overlay
-      // can leave a stuck DWM focus strip once opacity returns to 1.
-      clearTransparentFocus(win)
+      if (keepFocus) {
+        applyMousePolicy(snapMode)
+        if (!win.isDestroyed()) win.webContents.send('overlay-revealed')
+      } else {
+        // Reaffirm inactive after the fade — clicks that closed the overlay
+        // can leave a stuck DWM focus strip once opacity returns to 1.
+        clearTransparentFocus(win)
+      }
     }
   }, 16)
 }
@@ -173,6 +203,7 @@ function isAnchoredMode(mode: string | null): boolean {
 function pushState(): void {
   if (!orbWindow || orbWindow.isDestroyed()) return
   const snap = service.snapshot()
+  if (snap.mode !== 'timeline') timelineEditing = false
   const orbSize = service.getConfig().settings.orbSize || ORB_SIZE
   const margin = service.getConfig().settings.marginPx
   const anchor = getAnchor()
@@ -228,7 +259,11 @@ function pushState(): void {
         anchor
       )
       applyMousePolicy(snap.mode)
-      clearTransparentFocus(targetWindow)
+      if (!needsKeyboard(snap.mode)) {
+        clearTransparentFocus(targetWindow)
+      } else if (!targetWindow.isDestroyed()) {
+        targetWindow.webContents.send('overlay-revealed')
+      }
     }, 120)
     return
   }
@@ -269,9 +304,17 @@ function pushState(): void {
     boundsRevealTimer = setTimeout(() => {
       boundsRevealTimer = null
       if (targetWindow.isDestroyed()) return
-      fadeInWindow(targetWindow, leavingCenteredOverlay ? 180 : 100)
+      fadeInWindow(targetWindow, leavingCenteredOverlay ? 180 : 100, snap.mode)
     }, delayMs)
   }
+}
+
+function requestToggleWheel(): void {
+  const now = Date.now()
+  if (now - lastWheelToggleAt < WHEEL_TOGGLE_DEBOUNCE_MS) return
+  lastWheelToggleAt = now
+  service.toggleWheel()
+  pushState()
 }
 
 function createWindow(): void {
@@ -309,6 +352,26 @@ function createWindow(): void {
   orbWindow.on('closed', () => {
     orbWindow = null
   })
+
+  /*
+   * Windows + focusable:false + transparent: Chromium often swallows the
+   * first left-clicks until the HWND has been focused (e.g. via the
+   * context menu). The native WM_LBUTTON* still arrive, so idle clicks
+   * are handled here. Debounced with the renderer path to avoid a double
+   * toggle once Chromium starts receiving clicks too.
+   */
+  orbWindow.hookWindowMessage(WM_LBUTTONDOWN, () => {
+    idleLeftDown = screen.getCursorScreenPoint()
+  })
+  orbWindow.hookWindowMessage(WM_LBUTTONUP, () => {
+    const down = idleLeftDown
+    idleLeftDown = null
+    if (!service || !down) return
+    if (service.snapshot().mode !== 'idle') return
+    const up = screen.getCursorScreenPoint()
+    if (Math.hypot(up.x - down.x, up.y - down.y) >= IDLE_CLICK_DRAG_PX) return
+    requestToggleWheel()
+  })
 }
 
 function setupIpc(): void {
@@ -333,8 +396,7 @@ function setupIpc(): void {
   })
 
   ipcMain.handle('toggle-wheel', () => {
-    service.toggleWheel()
-    pushState()
+    requestToggleWheel()
     return service.snapshot()
   })
 
@@ -414,6 +476,30 @@ function setupIpc(): void {
     service.updateProfiles(profiles)
     pushState()
     return service.snapshot()
+  })
+
+  ipcMain.handle('update-session-times', (_e, id: string, startIso: string, endIso: string | null) => {
+    service.updateSessionTimes(id, startIso, endIso)
+    pushState()
+    return service.snapshot()
+  })
+
+  ipcMain.handle('reassign-session', (_e, id: string, slot: ProfileSlot) => {
+    service.reassignSession(id, slot)
+    pushState()
+    return service.snapshot()
+  })
+
+  ipcMain.handle('split-session', (_e, id: string, atIso: string) => {
+    service.splitSession(id, atIso)
+    pushState()
+    return service.snapshot()
+  })
+
+  ipcMain.handle('set-timeline-editing', (_e, editing: boolean) => {
+    timelineEditing = !!editing
+    const mode = service.snapshot().mode
+    if (mode === 'timeline') applyMousePolicy(mode)
   })
 
   ipcMain.handle('get-config', () => service.getConfig())

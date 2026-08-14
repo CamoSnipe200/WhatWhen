@@ -110,18 +110,19 @@ export const SLOT_DISPLAY: Record<ProfileSlot, string> = {
   0: '0'
 }
 
-/** Six-slot chromatic palette */
+/** Seven-slot chromatic palette */
 export const DEFAULT_COLORS: string[] = [
   '#FF4D6A', // 1 crimson rose
   '#FF8C42', // 2 orange
   '#FFD166', // 3 gold
   '#8FE388', // 4 spring green
   '#2EC4B6', // 5 teal
-  '#5B6CFF' // 6 indigo
+  '#5B6CFF', // 6 indigo
+  '#C084FC' // 7 violet
 ]
 
-/** Active profile slots (hotkeys Ctrl+Shift+Alt+1–6) */
-export const PROFILE_SLOTS: ProfileSlot[] = [1, 2, 3, 4, 5, 6]
+/** Active profile slots (hotkeys Ctrl+Shift+Alt+1–7) */
+export const PROFILE_SLOTS: ProfileSlot[] = [1, 2, 3, 4, 5, 6, 7]
 
 export function defaultProfiles(): Profile[] {
   return PROFILE_SLOTS.map((slot, i) => ({

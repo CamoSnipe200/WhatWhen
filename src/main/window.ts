@@ -11,7 +11,7 @@ export const BUBBLE_H = 168
 export const WHEEL_W = 320
 export const WHEEL_H = 300
 export const SETTINGS_W = 320
-export const SETTINGS_H = 420
+export const SETTINGS_H = 460
 export const OVERLAY_W = 760
 export const OVERLAY_H = 440
 export const MARGIN = 16
@@ -44,7 +44,15 @@ export function computeLayout(
     return { width: orbSize + pad, height: orbSize + pad }
   }
   if (mode === 'wheel') {
-    return { width: WHEEL_W, height: WHEEL_H }
+    if (pendingCount <= 0) return { width: WHEEL_W, height: WHEEL_H }
+    const n = Math.min(pendingCount, MAX_STACK)
+    const stackH = n * STACK_DOT + Math.max(0, n - 1) * STACK_GAP
+    // Stack sits above the outer ring (~178px from the HWND bottom).
+    const stackBottom = 178
+    return {
+      width: WHEEL_W,
+      height: Math.max(WHEEL_H, stackBottom + stackH + 12)
+    }
   }
   if (mode === 'stack' || mode === 'bubble') {
     const n = Math.min(Math.max(pendingCount, 1), MAX_STACK)
