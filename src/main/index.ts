@@ -42,6 +42,7 @@ let lastMode: string | null = null
 let contextMenuOpen = false
 let boundsRevealTimer: ReturnType<typeof setTimeout> | null = null
 let opacityFadeTimer: ReturnType<typeof setInterval> | null = null
+let paintResetTimer: ReturnType<typeof setTimeout> | null = null
 let overlayEscapeRegistered = false
 /** Timeline inspector is open and needs keyboard for time fields. */
 let timelineEditing = false
@@ -96,6 +97,28 @@ function clearTransparentFocus(win: BrowserWindow): void {
   win.showInactive()
 }
 
+/** Paint-only DWM reset — does not demote focus, so typing still works. */
+function resetTransparentPaint(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  win.setHasShadow(false)
+  win.setBackgroundColor('#00000000')
+}
+
+/** DWM often paints the focus strip a frame after activation. */
+function armTransparentPaintReset(win: BrowserWindow): void {
+  // Mid-fade resets recomposite the HWND while opacity is climbing — that
+  // is the flicker on notes open/close and profile switches. Fade-end
+  // applyMousePolicy performs one reset once opacity is back at 1.
+  if (opacityFadeTimer) return
+  resetTransparentPaint(win)
+  if (paintResetTimer) clearTimeout(paintResetTimer)
+  paintResetTimer = setTimeout(() => {
+    paintResetTimer = null
+    if (opacityFadeTimer) return
+    resetTransparentPaint(win)
+  }, 80)
+}
+
 function needsKeyboard(mode: string | null): boolean {
   return (
     mode === 'bubble' ||
@@ -118,7 +141,8 @@ function applyMousePolicy(mode: string): void {
     setOverlayEscape(false)
     orbWindow.setFocusable(true)
     orbWindow.setIgnoreMouseEvents(false)
-    orbWindow.focus()
+    if (!orbWindow.isFocused()) orbWindow.focus()
+    armTransparentPaintReset(orbWindow)
     return
   }
 
@@ -148,8 +172,10 @@ function applyMousePolicy(mode: string): void {
 function clearRevealTimers(): void {
   if (boundsRevealTimer) clearTimeout(boundsRevealTimer)
   if (opacityFadeTimer) clearInterval(opacityFadeTimer)
+  if (paintResetTimer) clearTimeout(paintResetTimer)
   boundsRevealTimer = null
   opacityFadeTimer = null
+  paintResetTimer = null
 }
 
 function fadeInWindow(win: BrowserWindow, durationMs = 100, mode?: string): void {
@@ -157,15 +183,8 @@ function fadeInWindow(win: BrowserWindow, durationMs = 100, mode?: string): void
   const keepFocus = needsKeyboard(snapMode)
   const startedAt = Date.now()
   win.setOpacity(0)
-  if (keepFocus) {
-    win.setFocusable(true)
-    win.show()
-    win.focus()
-  } else {
-    clearTransparentFocus(win)
-    win.showInactive()
-  }
 
+  // Mark the fade before show/focus so paint resets skip until opacity is 1.
   opacityFadeTimer = setInterval(() => {
     if (win.isDestroyed()) {
       clearRevealTimers()
@@ -187,6 +206,16 @@ function fadeInWindow(win: BrowserWindow, durationMs = 100, mode?: string): void
       }
     }
   }, 16)
+
+  if (keepFocus) {
+    win.setFocusable(true)
+    win.show()
+    if (!win.isFocused()) win.focus()
+    armTransparentPaintReset(win)
+  } else {
+    clearTransparentFocus(win)
+    win.showInactive()
+  }
 }
 
 /** Modes that keep the orb pinned to the HWND bottom-right. */
@@ -259,9 +288,7 @@ function pushState(): void {
         anchor
       )
       applyMousePolicy(snap.mode)
-      if (!needsKeyboard(snap.mode)) {
-        clearTransparentFocus(targetWindow)
-      } else if (!targetWindow.isDestroyed()) {
+      if (needsKeyboard(snap.mode) && !targetWindow.isDestroyed()) {
         targetWindow.webContents.send('overlay-revealed')
       }
     }, 120)
@@ -336,6 +363,13 @@ function createWindow(): void {
   orbWindow.webContents.on('page-title-updated', (e) => {
     e.preventDefault()
     orbWindow?.setTitle('')
+  })
+
+  // DWM can paint the white strip when focus arrives from a click rather
+  // than from applyMousePolicy (e.g. selecting a timeline bar).
+  orbWindow.on('focus', () => {
+    if (!orbWindow || orbWindow.isDestroyed()) return
+    armTransparentPaintReset(orbWindow)
   })
 
   // Losing focus dismisses keyboard overlays; also helps context-menu cleanup
@@ -499,7 +533,12 @@ function setupIpc(): void {
   ipcMain.handle('set-timeline-editing', (_e, editing: boolean) => {
     timelineEditing = !!editing
     const mode = service.snapshot().mode
-    if (mode === 'timeline') applyMousePolicy(mode)
+    if (mode === 'timeline') {
+      applyMousePolicy(mode)
+      if (timelineEditing && orbWindow && !orbWindow.isDestroyed()) {
+        armTransparentPaintReset(orbWindow)
+      }
+    }
   })
 
   ipcMain.handle('get-config', () => service.getConfig())
