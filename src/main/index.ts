@@ -22,6 +22,7 @@ import {
 } from './window'
 import { getDayMarkdownPath, getDefaultLogDir } from './paths'
 import {
+  isValidDateKey,
   localDateKey,
   type Profile,
   type ProfileSlot
@@ -730,6 +731,36 @@ function setupIpc(): void {
   ipcMain.on('orb-pointer-down', () => beginOrbDrag(true))
   ipcMain.on('orb-pointer-up', () => endOrbDrag(true))
   ipcMain.handle('recover-ui', () => recoverUi())
+
+  ipcMain.handle('set-view-range', (_e, start: string, end: string) => {
+    if (!isValidDateKey(start) || !isValidDateKey(end)) return service.snapshot()
+    service.setViewRange(start, end)
+    pushState()
+    return service.snapshot()
+  })
+
+  ipcMain.handle('set-timeline-day', (_e, dateKey: string) => {
+    if (!isValidDateKey(dateKey)) return service.snapshot()
+    service.setTimelineDay(dateKey)
+    pushState()
+    return service.snapshot()
+  })
+
+  ipcMain.handle('reset-view-today', () => {
+    service.resetViewToToday()
+    pushState()
+    return service.snapshot()
+  })
+
+  ipcMain.handle('list-log-dates', () => service.listAvailableDates())
+
+  ipcMain.handle('open-day-log', async (_e, dateKey: string) => {
+    if (!isValidDateKey(dateKey)) return
+    const logDir = service.getConfig().settings.logDir || getDefaultLogDir()
+    const md = getDayMarkdownPath(logDir, dateKey)
+    if (!existsSync(md)) return
+    await shell.openPath(md)
+  })
 
   ipcMain.handle('open-today-log', async () => {
     const logDir = service.getConfig().settings.logDir || getDefaultLogDir()

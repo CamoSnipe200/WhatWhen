@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import {
   AppConfig,
   AppSettings,
@@ -9,6 +9,7 @@ import {
   defaultProfiles,
   formatDuration,
   formatTimeLocal,
+  isValidDateKey,
   localDateKey
 } from '../shared/types'
 import {
@@ -92,7 +93,25 @@ export function saveRuntime(state: RuntimeState): void {
   writeFileSync(getRuntimeStatePath(), JSON.stringify(state, null, 2), 'utf-8')
 }
 
+const DATE_JSON_RE = /^(\d{4}-\d{2}-\d{2})\.json$/
+
+export function listLogDates(logDir: string): string[] {
+  try {
+    const names = readdirSync(logDir)
+    const keys = names
+      .map((name) => DATE_JSON_RE.exec(name)?.[1])
+      .filter((key): key is string => !!key && isValidDateKey(key))
+    keys.sort()
+    return keys
+  } catch {
+    return []
+  }
+}
+
 export function loadDayLog(logDir: string, dateKey = localDateKey()): DayLog {
+  if (!isValidDateKey(dateKey)) {
+    return { date: localDateKey(), sessions: [] }
+  }
   const path = getDayJsonPath(logDir, dateKey)
   if (!existsSync(path)) {
     return { date: dateKey, sessions: [] }
@@ -106,7 +125,12 @@ export function loadDayLog(logDir: string, dateKey = localDateKey()): DayLog {
   }
 }
 
+export function loadDayLogs(logDir: string, dateKeys: string[]): DayLog[] {
+  return dateKeys.filter(isValidDateKey).map((dateKey) => loadDayLog(logDir, dateKey))
+}
+
 export function saveDayLog(logDir: string, log: DayLog): void {
+  if (!isValidDateKey(log.date)) return
   const sorted = {
     ...log,
     sessions: [...log.sessions].sort(

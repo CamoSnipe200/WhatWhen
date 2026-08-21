@@ -50,10 +50,23 @@
           <div class="overlay-inner">
             <div class="overlay-header">
               <div class="overlay-title">Analysis</div>
+              <nav class="overlay-nav">
+                <button type="button" id="analysis-day-prev" class="overlay-step" hidden aria-label="Previous day">
+                  ‹
+                </button>
+                <button type="button" id="analysis-date-chip" class="date-chip">Today</button>
+                <button type="button" id="analysis-day-next" class="overlay-step" hidden aria-label="Next day">
+                  ›
+                </button>
+                <button type="button" id="analysis-open-log" class="overlay-step" aria-label="Open log">
+                  ↗
+                </button>
+              </nav>
               <button type="button" id="analysis-close" class="overlay-close" aria-label="Close">
                 ×
               </button>
             </div>
+            <div id="analysis-calendar-pop" class="calendar-pop" hidden></div>
             <div id="analysis-body" class="analysis-body"></div>
             <div id="analysis-notes" class="analysis-notes" hidden></div>
           </div>
@@ -63,10 +76,23 @@
           <div class="overlay-inner">
             <div class="overlay-header">
               <div class="overlay-title">Timeline</div>
+              <nav class="overlay-nav">
+                <button type="button" id="timeline-day-prev" class="overlay-step" hidden aria-label="Previous day">
+                  ‹
+                </button>
+                <button type="button" id="timeline-date-chip" class="date-chip">Today</button>
+                <button type="button" id="timeline-day-next" class="overlay-step" hidden aria-label="Next day">
+                  ›
+                </button>
+                <button type="button" id="timeline-open-log" class="overlay-step" aria-label="Open log">
+                  ↗
+                </button>
+              </nav>
               <button type="button" id="timeline-close" class="overlay-close" aria-label="Close">
                 ×
               </button>
             </div>
+            <div id="timeline-calendar-pop" class="calendar-pop" hidden></div>
             <div id="timeline-scroll" class="timeline-scroll">
               <div id="timeline-track" class="timeline-track"></div>
             </div>

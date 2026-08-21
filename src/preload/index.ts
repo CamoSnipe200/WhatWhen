@@ -44,6 +44,14 @@ const api = {
   orbPointerDown: (): void => ipcRenderer.send('orb-pointer-down'),
   orbPointerUp: (): void => ipcRenderer.send('orb-pointer-up'),
   recoverUi: (): Promise<void> => ipcRenderer.invoke('recover-ui'),
+  setViewRange: (start: string, end: string): Promise<UiSnapshot> =>
+    ipcRenderer.invoke('set-view-range', start, end),
+  setTimelineDay: (dateKey: string): Promise<UiSnapshot> =>
+    ipcRenderer.invoke('set-timeline-day', dateKey),
+  resetViewToday: (): Promise<UiSnapshot> => ipcRenderer.invoke('reset-view-today'),
+  listLogDates: (): Promise<string[]> => ipcRenderer.invoke('list-log-dates'),
+  openDayLog: (dateKey: string): Promise<void> =>
+    ipcRenderer.invoke('open-day-log', dateKey),
   openTodayLog: (): Promise<void> => ipcRenderer.invoke('open-today-log'),
   openLogFolder: (): Promise<void> => ipcRenderer.invoke('open-log-folder'),
   showContextMenu: (): Promise<void> => ipcRenderer.invoke('show-context-menu'),

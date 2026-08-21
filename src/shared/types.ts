@@ -72,6 +72,22 @@ export interface DayAnalysis {
   slices: ProfileSlice[]
 }
 
+export interface DateRange {
+  startKey: string
+  endKey: string
+}
+
+export interface RangeAnalysis {
+  range: DateRange
+  days: DayAnalysis[]
+  spanMs: number
+  trackedMs: number
+  untrackedMs: number
+  trackedPercent: number
+  untrackedPercent: number
+  slices: ProfileSlice[]
+}
+
 export interface UiSnapshot {
   mode: UiMode
   activeSession: Session | null
@@ -87,10 +103,15 @@ export interface UiSnapshot {
   hotkeysOk: boolean
   /** Whether today's markdown log file exists */
   todayLogExists: boolean
-  /** Today's sessions for timeline / analysis overlays */
-  todaySessions: Session[]
-  /** Precomputed day analysis (today) */
-  analysis: DayAnalysis | null
+  view: DateRange
+  viewIsToday: boolean
+  viewIncludesToday: boolean
+  /** Whether markdown exists for the timeline day */
+  viewLogExists: boolean
+  timelineDateKey: string
+  viewSessions: Session[]
+  viewAnalysis: RangeAnalysis
+  availableDates: string[]
 }
 
 export interface PromptPayload {
@@ -155,6 +176,90 @@ export function localDateKey(d = new Date()): string {
   return `${y}-${m}-${day}`
 }
 
+export const MAX_RANGE_DAYS = 31
+
+const DATE_KEY_RE = /^(\d{4})-(\d{2})-(\d{2})$/
+const MONTH_SHORT = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec'
+]
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+export function parseDateKey(key: string): Date | null {
+  const m = DATE_KEY_RE.exec(key)
+  if (!m) return null
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  const date = new Date(y, mo - 1, d)
+  if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) {
+    return null
+  }
+  date.setHours(0, 0, 0, 0)
+  return date
+}
+
+export function isValidDateKey(key: string): boolean {
+  if (typeof key !== 'string' || !DATE_KEY_RE.test(key)) return false
+  const parsed = parseDateKey(key)
+  return parsed !== null && localDateKey(parsed) === key
+}
+
+/** Inclusive date keys, oldest first, capped at MAX_RANGE_DAYS. */
+export function eachDateKey(startKey: string, endKey: string): string[] {
+  const start = parseDateKey(startKey)
+  const end = parseDateKey(endKey)
+  if (!start || !end) return []
+  let a = start
+  let b = end
+  if (a.getTime() > b.getTime()) {
+    a = end
+    b = start
+  }
+  const keys: string[] = []
+  const cur = new Date(a)
+  while (cur.getTime() <= b.getTime() && keys.length < MAX_RANGE_DAYS) {
+    keys.push(localDateKey(cur))
+    cur.setDate(cur.getDate() + 1)
+  }
+  return keys
+}
+
+export function clampDateKeyToToday(key: string, now = new Date()): string {
+  const today = localDateKey(now)
+  if (!isValidDateKey(key)) return today
+  return key > today ? today : key
+}
+
+export function formatDateKeyShort(key: string): string {
+  const d = parseDateKey(key)
+  if (!d) return key
+  return `${MONTH_SHORT[d.getMonth()]} ${d.getDate()}`
+}
+
+export function formatDateKeyLong(key: string): string {
+  const d = parseDateKey(key)
+  if (!d) return key
+  return `${WEEKDAY_SHORT[d.getDay()]}, ${MONTH_SHORT[d.getMonth()]} ${d.getDate()}`
+}
+
+export function profileSliceKey(s: {
+  profileSlot: ProfileSlot | null
+  profileName: string
+}): string {
+  return `${s.profileSlot}:${s.profileName}`
+}
+
 /** Start of local calendar day for a date key or Date */
 export function dayStart(d = new Date()): Date {
   const out = new Date(d)
@@ -201,7 +306,7 @@ export function computeDayAnalysis(
     const dur = Math.max(0, sEnd - sStart)
     if (dur <= 0) continue
     trackedMs += dur
-    const key = `${s.profileSlot}:${s.profileName}`
+    const key = profileSliceKey(s)
     let acc = byKey.get(key)
     if (!acc) {
       acc = {
@@ -241,6 +346,77 @@ export function computeDayAnalysis(
     untrackedMs,
     trackedPercent: (trackedMs / dayMs) * 100,
     untrackedPercent: (untrackedMs / dayMs) * 100,
+    slices
+  }
+}
+
+export function computeRangeAnalysis(logs: DayLog[], now = new Date()): RangeAnalysis {
+  const days = logs.map((log) => computeDayAnalysis(log, now))
+  const startKey = logs[0]?.date ?? localDateKey(now)
+  const endKey = logs.length > 0 ? logs[logs.length - 1]!.date : startKey
+
+  type Acc = {
+    profileSlot: ProfileSlot | null
+    profileName: string
+    profileColor: string
+    durationMs: number
+    notes: string[]
+  }
+
+  const byKey = new Map<string, Acc>()
+  let spanMs = 0
+  let trackedMs = 0
+  let untrackedMs = 0
+  const prefixNotes = logs.length > 1
+
+  for (const day of days) {
+    spanMs += day.dayMs
+    trackedMs += day.trackedMs
+    untrackedMs += day.untrackedMs
+    const prefix = prefixNotes ? `${formatDateKeyShort(day.date)} · ` : ''
+    for (const slice of day.slices) {
+      const key = profileSliceKey(slice)
+      let acc = byKey.get(key)
+      if (!acc) {
+        acc = {
+          profileSlot: slice.profileSlot,
+          profileName: slice.profileName,
+          profileColor: slice.profileColor,
+          durationMs: 0,
+          notes: []
+        }
+        byKey.set(key, acc)
+      }
+      acc.durationMs += slice.durationMs
+      if (!acc.profileColor && slice.profileColor) {
+        acc.profileColor = slice.profileColor
+      }
+      for (const note of slice.notes) {
+        acc.notes.push(prefix ? `${prefix}${note}` : note)
+      }
+    }
+  }
+
+  const slices: ProfileSlice[] = [...byKey.values()]
+    .sort((a, b) => b.durationMs - a.durationMs)
+    .map((a) => ({
+      profileSlot: a.profileSlot,
+      profileName: a.profileName,
+      profileColor: a.profileColor,
+      durationMs: a.durationMs,
+      percentOfDay: spanMs > 0 ? (a.durationMs / spanMs) * 100 : 0,
+      percentOfTracked: trackedMs > 0 ? (a.durationMs / trackedMs) * 100 : 0,
+      notes: a.notes
+    }))
+
+  return {
+    range: { startKey, endKey },
+    days,
+    spanMs,
+    trackedMs,
+    untrackedMs,
+    trackedPercent: spanMs > 0 ? (trackedMs / spanMs) * 100 : 0,
+    untrackedPercent: spanMs > 0 ? (untrackedMs / spanMs) * 100 : 0,
     slices
   }
 }

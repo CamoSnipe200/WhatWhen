@@ -2,20 +2,29 @@ import { randomUUID } from 'crypto'
 import { existsSync } from 'fs'
 import {
   AppConfig,
+  DateRange,
+  DayLog,
+  MAX_RANGE_DAYS,
   Profile,
   ProfileSlot,
   Session,
   UiSnapshot,
-  computeDayAnalysis,
+  clampDateKeyToToday,
+  computeRangeAnalysis,
   dayStart,
+  eachDateKey,
   formatDuration,
-  localDateKey
+  isValidDateKey,
+  localDateKey,
+  parseDateKey
 } from '../shared/types'
 import {
   deleteSession,
+  listLogDates,
   listPending,
   loadConfig,
   loadDayLog,
+  loadDayLogs,
   loadRuntime,
   saveConfig,
   saveRuntime,
@@ -34,6 +43,12 @@ export class SessionService {
   private mode: UiSnapshot['mode'] = 'idle'
   private listeners = new Set<Listener>()
   private tickTimer: ReturnType<typeof setInterval> | null = null
+  private viewStartKey = localDateKey()
+  private viewEndKey = localDateKey()
+  private timelineKey = localDateKey()
+  private viewPinnedToToday = true
+  private pastCache: { key: string; logs: DayLog[]; availableDates: string[] } | null =
+    null
   hotkeysOk = true
 
   constructor() {
@@ -83,8 +98,12 @@ export class SessionService {
   }
 
   updateSettings(partial: Partial<AppConfig['settings']>): void {
+    const logDirChanged =
+      typeof partial.logDir === 'string' &&
+      partial.logDir !== this.config.settings.logDir
     this.config.settings = { ...this.config.settings, ...partial }
     saveConfig(this.config)
+    if (logDirChanged) this.markLogsDirty()
     this.emit()
   }
 
@@ -94,17 +113,48 @@ export class SessionService {
   }
 
   snapshot(): UiSnapshot {
+    if (this.viewPinnedToToday) {
+      const today = localDateKey()
+      this.viewStartKey = today
+      this.viewEndKey = today
+      this.timelineKey = today
+    }
+
     const logDir = this.config.settings.logDir
     const pending = listPending(logDir)
-    const dayLog = loadDayLog(logDir)
-    // Include in-progress active session for live analysis/timeline
-    const sessions = [...dayLog.sessions]
-    if (this.active && !this.active.endIso) {
-      const idx = sessions.findIndex((s) => s.id === this.active!.id)
-      if (idx >= 0) sessions[idx] = this.active
-      else sessions.push(this.active)
+    const today = localDateKey()
+    const now = new Date()
+    const startKey = this.viewStartKey
+    const endKey = this.viewEndKey
+    const keys = eachDateKey(startKey, endKey)
+    const cacheKey = `${startKey}..${endKey}`
+
+    let pastLogs: DayLog[]
+    let availableDates: string[]
+    if (this.pastCache?.key === cacheKey) {
+      pastLogs = this.pastCache.logs
+      availableDates = this.pastCache.availableDates
+    } else {
+      const pastKeys = keys.filter((key) => key !== today)
+      pastLogs = loadDayLogs(logDir, pastKeys)
+      availableDates = listLogDates(logDir)
+      this.pastCache = { key: cacheKey, logs: pastLogs, availableDates }
     }
-    const analysis = computeDayAnalysis({ date: dayLog.date, sessions })
+
+    const dayLogs: DayLog[] = keys.map((key) => {
+      if (key === today) {
+        return { date: key, sessions: this.sessionsForDay(today) }
+      }
+      const cached = pastLogs.find((log) => log.date === key)
+      return { date: key, sessions: cached?.sessions ?? [] }
+    })
+
+    const view: DateRange = { startKey, endKey }
+    const timelineDateKey = this.timelineKey
+    const viewLogExists =
+      isValidDateKey(timelineDateKey) &&
+      existsSync(getDayMarkdownPath(logDir, timelineDateKey))
+
     return {
       mode: this.mode,
       activeSession: this.active,
@@ -117,11 +167,81 @@ export class SessionService {
       profiles: this.config.profiles,
       hotkeysOk: this.hotkeysOk,
       todayLogExists: this.todayLogExists(),
-      todaySessions: sessions.sort(
-        (a, b) => new Date(a.startIso).getTime() - new Date(b.startIso).getTime()
-      ),
-      analysis
+      view,
+      viewIsToday: startKey === today && endKey === today,
+      viewIncludesToday: startKey <= today && today <= endKey,
+      viewLogExists,
+      timelineDateKey,
+      viewSessions: this.sessionsForDay(timelineDateKey),
+      viewAnalysis: computeRangeAnalysis(dayLogs, now),
+      availableDates
     }
+  }
+
+  setViewRange(start: string, end: string): UiSnapshot {
+    if (!isValidDateKey(start) || !isValidDateKey(end)) {
+      return this.snapshot()
+    }
+    let startKey = start
+    let endKey = end
+    if (startKey > endKey) {
+      const tmp = startKey
+      startKey = endKey
+      endKey = tmp
+    }
+    startKey = clampDateKeyToToday(startKey)
+    endKey = clampDateKeyToToday(endKey)
+    if (startKey > endKey) {
+      const tmp = startKey
+      startKey = endKey
+      endKey = tmp
+    }
+
+    const endDate = parseDateKey(endKey)
+    if (endDate) {
+      const limit = new Date(endDate)
+      limit.setDate(limit.getDate() - (MAX_RANGE_DAYS - 1))
+      const minStart = localDateKey(limit)
+      if (startKey < minStart) startKey = minStart
+    }
+
+    this.viewStartKey = startKey
+    this.viewEndKey = endKey
+    const today = localDateKey()
+    this.viewPinnedToToday = startKey === today && endKey === today
+    this.timelineKey = today >= startKey && today <= endKey ? today : endKey
+    this.pastCache = null
+    this.emit()
+    return this.snapshot()
+  }
+
+  setTimelineDay(dateKey: string): UiSnapshot {
+    if (!isValidDateKey(dateKey)) return this.snapshot()
+    if (dateKey < this.viewStartKey || dateKey > this.viewEndKey) {
+      return this.snapshot()
+    }
+    this.timelineKey = dateKey
+    this.emit()
+    return this.snapshot()
+  }
+
+  resetViewToToday(): UiSnapshot {
+    const today = localDateKey()
+    this.viewStartKey = today
+    this.viewEndKey = today
+    this.timelineKey = today
+    this.viewPinnedToToday = true
+    this.pastCache = null
+    this.emit()
+    return this.snapshot()
+  }
+
+  listAvailableDates(): string[] {
+    return listLogDates(this.config.settings.logDir)
+  }
+
+  private markLogsDirty(): void {
+    this.pastCache = null
   }
 
   getProfile(slot: ProfileSlot): Profile {
@@ -160,6 +280,7 @@ export class SessionService {
     }
     saveRuntime({ activeSession: this.active })
     upsertSession(this.config.settings.logDir, this.active)
+    this.markLogsDirty()
 
     if (closed) {
       this.bubbleSession = closed
@@ -199,6 +320,7 @@ export class SessionService {
     }
     saveRuntime({ activeSession: this.active })
     upsertSession(this.config.settings.logDir, this.active)
+    this.markLogsDirty()
 
     if (closed) {
       this.bubbleSession = closed
@@ -243,6 +365,7 @@ export class SessionService {
     this.active = null
     saveRuntime({ activeSession: null })
     deleteSession(this.config.settings.logDir, id, localDateKey(new Date(startIso)))
+    this.markLogsDirty()
     this.bubbleSession = null
     this.bubbleFromBacklog = false
     this.mode = 'idle'
@@ -268,6 +391,7 @@ export class SessionService {
       closed.endIso = eod.toISOString()
     }
     upsertSession(this.config.settings.logDir, closed)
+    this.markLogsDirty()
     this.active = null
     saveRuntime({ activeSession: null })
     return closed
@@ -298,6 +422,7 @@ export class SessionService {
   }
 
   openAnalysis(): UiSnapshot {
+    this.resetViewToToday()
     this.mode = 'analysis'
     this.bubbleSession = null
     this.bubbleFromBacklog = false
@@ -306,6 +431,7 @@ export class SessionService {
   }
 
   openTimeline(): UiSnapshot {
+    this.resetViewToToday()
     this.mode = 'timeline'
     this.bubbleSession = null
     this.bubbleFromBacklog = false
@@ -325,6 +451,7 @@ export class SessionService {
     this.mode = 'idle'
     this.bubbleSession = null
     this.bubbleFromBacklog = false
+    this.resetViewToToday()
     this.emit()
     return this.snapshot()
   }
@@ -374,31 +501,47 @@ export class SessionService {
 
   /** Save notes for a session id (empty string = saved blank) */
   private persistNotes(sessionId: string, notes: string): void {
+    const session = this.findSession(sessionId)
+    if (!session) return
+    const dateKey = localDateKey(new Date(session.startIso))
+    if (!isValidDateKey(dateKey)) return
     const logDir = this.config.settings.logDir
-    const log = loadDayLog(logDir)
-    const session = log.sessions.find((s) => s.id === sessionId)
-    if (session) {
-      const updated: Session = {
-        ...session,
-        notes: notes.trim(),
-        notesStatus: 'saved'
-      }
-      upsertSession(logDir, updated)
-    }
+    const log = loadDayLog(logDir, dateKey)
+    const found = log.sessions.find((s) => s.id === sessionId)
+    if (!found) return
+    upsertSession(logDir, {
+      ...found,
+      notes: notes.trim(),
+      notesStatus: 'saved'
+    })
+    this.markLogsDirty()
   }
 
   /** Mark backlog notes as skipped (clears pending without requiring text). */
   private skipNotes(sessionId: string): void {
+    const session = this.findSession(sessionId)
+    if (!session) return
+    const dateKey = localDateKey(new Date(session.startIso))
+    if (!isValidDateKey(dateKey)) return
     const logDir = this.config.settings.logDir
-    const log = loadDayLog(logDir)
-    const session = log.sessions.find((s) => s.id === sessionId)
-    if (session) {
-      const updated: Session = {
-        ...session,
-        notesStatus: 'skipped'
-      }
-      upsertSession(logDir, updated)
+    const log = loadDayLog(logDir, dateKey)
+    const found = log.sessions.find((s) => s.id === sessionId)
+    if (!found) return
+    upsertSession(logDir, {
+      ...found,
+      notesStatus: 'skipped'
+    })
+    this.markLogsDirty()
+  }
+
+  private findSession(sessionId: string): Session | undefined {
+    const today = localDateKey()
+    const fromToday = this.sessionsForDay(today).find((s) => s.id === sessionId)
+    if (fromToday) return fromToday
+    if (this.timelineKey !== today) {
+      return this.sessionsForDay(this.timelineKey).find((s) => s.id === sessionId)
     }
+    return undefined
   }
 
   /** Save bubble with current draft text then close (clears pending) */
@@ -451,11 +594,12 @@ export class SessionService {
     return formatDuration(ms)
   }
 
-  private listedToday(): Session[] {
+  private sessionsForDay(dateKey = localDateKey()): Session[] {
+    if (!isValidDateKey(dateKey)) return []
     const logDir = this.config.settings.logDir
-    const dayLog = loadDayLog(logDir)
+    const dayLog = loadDayLog(logDir, dateKey)
     const sessions = [...dayLog.sessions]
-    if (this.active && !this.active.endIso) {
+    if (dateKey === localDateKey() && this.active && !this.active.endIso) {
       const idx = sessions.findIndex((s) => s.id === this.active!.id)
       if (idx >= 0) sessions[idx] = this.active
       else sessions.push(this.active)
@@ -475,7 +619,7 @@ export class SessionService {
     startIso: string,
     endIso: string | null
   ): UiSnapshot {
-    const sessions = this.listedToday()
+    const sessions = this.sessionsForDay(this.timelineKey)
     const idx = sessions.findIndex((s) => s.id === id)
     if (idx < 0) return this.snapshot()
 
@@ -511,6 +655,7 @@ export class SessionService {
       this.active = updated
       saveRuntime({ activeSession: updated })
       upsertSession(this.config.settings.logDir, updated)
+      this.markLogsDirty()
       this.emit()
       return this.snapshot()
     }
@@ -532,6 +677,7 @@ export class SessionService {
       endIso: new Date(endMs).toISOString()
     }
     upsertSession(this.config.settings.logDir, updated)
+    this.markLogsDirty()
     this.emit()
     return this.snapshot()
   }
@@ -548,14 +694,15 @@ export class SessionService {
       this.active = { ...this.active, ...patch }
       saveRuntime({ activeSession: this.active })
       upsertSession(this.config.settings.logDir, this.active)
+      this.markLogsDirty()
       this.emit()
       return this.snapshot()
     }
 
-    const log = loadDayLog(this.config.settings.logDir)
-    const session = log.sessions.find((s) => s.id === id)
+    const session = this.sessionsForDay(this.timelineKey).find((s) => s.id === id)
     if (!session) return this.snapshot()
     upsertSession(this.config.settings.logDir, { ...session, ...patch })
+    this.markLogsDirty()
     this.emit()
     return this.snapshot()
   }
@@ -569,7 +716,7 @@ export class SessionService {
     const at = new Date(atIso).getTime()
     if (Number.isNaN(at)) return this.snapshot()
 
-    const sessions = this.listedToday()
+    const sessions = this.sessionsForDay(this.timelineKey)
     const current = sessions.find((s) => s.id === id)
     if (!current) return this.snapshot()
 
@@ -599,6 +746,7 @@ export class SessionService {
       saveRuntime({ activeSession: second })
     }
     upsertSession(this.config.settings.logDir, second)
+    this.markLogsDirty()
     this.emit()
     return this.snapshot()
   }

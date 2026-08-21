@@ -1,13 +1,30 @@
 import './style.css'
 import type {
-  DayAnalysis,
+  DateRange,
   Profile,
   ProfileSlice,
   ProfileSlot,
+  RangeAnalysis,
   Session,
   UiSnapshot
 } from '../../shared/types'
-import { SLOT_DISPLAY, formatDuration, formatTimeLocal } from '../../shared/types'
+import {
+  SLOT_DISPLAY,
+  eachDateKey,
+  formatDuration,
+  formatTimeLocal,
+  localDateKey,
+  parseDateKey,
+  profileSliceKey
+} from '../../shared/types'
+import {
+  emptyStateCopy,
+  last7Range,
+  renderCalendarPopover,
+  renderDateChip,
+  thisWeekRange
+} from './calendar'
+import { closeTimePop, createTimeField, isTimePopOpen } from './time-field'
 import { placeOnArc, type RadialArc } from './radial-arc'
 
 const MAX_VISIBLE = 7
@@ -31,11 +48,21 @@ const analysisEl = document.getElementById('analysis') as HTMLDivElement
 const analysisBody = document.getElementById('analysis-body') as HTMLDivElement
 const analysisNotes = document.getElementById('analysis-notes') as HTMLDivElement
 const analysisClose = document.getElementById('analysis-close') as HTMLButtonElement
+const analysisDayPrev = document.getElementById('analysis-day-prev') as HTMLButtonElement
+const analysisDateChip = document.getElementById('analysis-date-chip') as HTMLButtonElement
+const analysisDayNext = document.getElementById('analysis-day-next') as HTMLButtonElement
+const analysisOpenLog = document.getElementById('analysis-open-log') as HTMLButtonElement
+const analysisCalendarPop = document.getElementById('analysis-calendar-pop') as HTMLDivElement
 const timelineEl = document.getElementById('timeline') as HTMLDivElement
 const timelineTrack = document.getElementById('timeline-track') as HTMLDivElement
 const timelineHover = document.getElementById('timeline-hover') as HTMLDivElement
 const timelineInspector = document.getElementById('timeline-inspector') as HTMLDivElement
 const timelineClose = document.getElementById('timeline-close') as HTMLButtonElement
+const timelineDayPrev = document.getElementById('timeline-day-prev') as HTMLButtonElement
+const timelineDateChip = document.getElementById('timeline-date-chip') as HTMLButtonElement
+const timelineDayNext = document.getElementById('timeline-day-next') as HTMLButtonElement
+const timelineOpenLog = document.getElementById('timeline-open-log') as HTMLButtonElement
+const timelineCalendarPop = document.getElementById('timeline-calendar-pop') as HTMLDivElement
 
 let state: UiSnapshot | null = null
 let editingId: string | null = null
@@ -47,6 +74,9 @@ let hoveredSliceKey: string | null = null
 let analysisSig = ''
 let analysisRebuildPending = false
 let notesHideTimer: number | null = null
+let lastViewKey = ''
+let calendarOpen = false
+let monthCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
 
 const STOP_HOLD_MS = 700
 let stopHold: number | null = null
@@ -107,6 +137,14 @@ function applyState(snap: UiSnapshot): void {
     JSON.stringify(prev.profiles) !== JSON.stringify(snap.profiles) ||
     prev.activeSession?.profileSlot !== snap.activeSession?.profileSlot
 
+  const viewKey = `${snap.view.startKey}..${snap.view.endKey}`
+  const viewChanged = lastViewKey !== viewKey
+  if (viewChanged) {
+    lastViewKey = viewKey
+    hoveredSliceKey = null
+    analysisRebuildPending = false
+  }
+
   state = snap
   renderOrb(snap)
   updateLiveTimer(snap)
@@ -140,30 +178,37 @@ function applyState(snap: UiSnapshot): void {
   }
 
   if (!modeChanged && snap.mode === 'analysis') {
-    const sig = analysisSignature(snap.analysis)
+    renderOverlayNav(snap)
+    if (viewChanged) {
+      renderAnalysis(snap.viewAnalysis)
+      return
+    }
+    const sig = analysisSignature(snap.viewAnalysis, snap.view)
     if (sig !== analysisSig) {
       if (hoveredSliceKey !== null) {
         analysisRebuildPending = true
       } else {
-        renderAnalysis(snap.analysis)
+        renderAnalysis(snap.viewAnalysis)
       }
-    } else if (hoveredSliceKey === null) {
-      updateAnalysisLive(snap.analysis)
+    } else if (hoveredSliceKey === null && snap.viewIncludesToday) {
+      updateAnalysisLive(snap.viewAnalysis)
     }
     return
   }
 
   if (!modeChanged && snap.mode === 'timeline') {
-    const prevN = prev?.todaySessions?.length
-    const nextN = snap.todaySessions?.length
-    const prevSig = prev?.todaySessions
+    renderOverlayNav(snap)
+    if (isTimePopOpen()) return
+    const prevN = prev?.viewSessions?.length
+    const nextN = snap.viewSessions.length
+    const prevSig = `${prev?.timelineDateKey}|${prev?.viewSessions
       ?.map((s) => `${s.id}:${s.startIso}:${s.endIso}:${s.profileSlot}:${s.profileColor}`)
-      .join('|')
-    const nextSig = snap.todaySessions
+      .join('|')}`
+    const nextSig = `${snap.timelineDateKey}|${snap.viewSessions
       .map((s) => `${s.id}:${s.startIso}:${s.endIso}:${s.profileSlot}:${s.profileColor}`)
-      .join('|')
+      .join('|')}`
     if (prevN !== nextN || prevSig !== nextSig) {
-      renderTimeline(snap.todaySessions)
+      renderTimeline(snap.viewSessions)
     }
     return
   }
@@ -183,14 +228,15 @@ function applyState(snap: UiSnapshot): void {
   } else if (snap.mode === 'settings') {
     showSettings(snap.profiles)
   } else if (snap.mode === 'analysis') {
-    showAnalysis(snap.analysis)
+    showAnalysis(snap)
   } else if (snap.mode === 'timeline') {
-    showTimeline(snap.todaySessions)
+    showTimeline(snap)
   }
 }
 
 function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
   cancelStopHold()
+  closeTimePop()
   if (nextMode !== 'wheel') {
     fadeOutChrome(wheelEl, () => {
       wheelEl.innerHTML = ''
@@ -226,6 +272,10 @@ function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
     analysisEl.hidden = true
     analysisNotes.hidden = true
     analysisBody.innerHTML = ''
+  }
+  closeCalendar()
+  if (nextMode !== 'analysis' && nextMode !== 'timeline') {
+    lastViewKey = ''
   }
   if (nextMode !== 'timeline') {
     timelineEl.hidden = true
@@ -574,16 +624,128 @@ async function saveSettingsAndClose(): Promise<void> {
   await window.whatwhen.closeUi()
 }
 
-// —— Analysis ——
-function sliceKey(slice: ProfileSlice): string {
-  return `${slice.profileSlot}:${slice.profileName}`
+function closeCalendar(): void {
+  calendarOpen = false
+  analysisCalendarPop.hidden = true
+  timelineCalendarPop.hidden = true
 }
 
-function analysisSignature(a: DayAnalysis | null): string {
-  if (!a) return 'none'
-  return a.slices
+function calendarHandlers(): {
+  onPickDay: (dateKey: string) => void
+  onExtendTo: (dateKey: string) => void
+  onToday: () => void
+  onLast7: () => void
+  onThisWeek: () => void
+  onMonthChange: (month: Date) => void
+} {
+  return {
+    onPickDay: (dateKey) => {
+      closeCalendar()
+      void window.whatwhen.setViewRange(dateKey, dateKey)
+    },
+    onExtendTo: (dateKey) => {
+      if (!state) return
+      closeCalendar()
+      void window.whatwhen.setViewRange(state.view.startKey, dateKey)
+    },
+    onToday: () => {
+      closeCalendar()
+      void window.whatwhen.resetViewToday()
+    },
+    onLast7: () => {
+      closeCalendar()
+      const range = last7Range()
+      void window.whatwhen.setViewRange(range.startKey, range.endKey)
+    },
+    onThisWeek: () => {
+      closeCalendar()
+      const range = thisWeekRange()
+      void window.whatwhen.setViewRange(range.startKey, range.endKey)
+    },
+    onMonthChange: (month) => {
+      monthCursor = new Date(month.getFullYear(), month.getMonth(), 1)
+      if (state && calendarOpen) paintCalendar(state)
+    }
+  }
+}
+
+function paintCalendar(snap: UiSnapshot): void {
+  const pop = snap.mode === 'timeline' ? timelineCalendarPop : analysisCalendarPop
+  const other = snap.mode === 'timeline' ? analysisCalendarPop : timelineCalendarPop
+  other.hidden = true
+  pop.hidden = false
+  renderCalendarPopover(pop, monthCursor, snap, calendarHandlers())
+}
+
+function openCalendar(which: 'analysis' | 'timeline'): void {
+  if (!state) return
+  const key = parseDateKey(
+    which === 'timeline' ? state.timelineDateKey : state.view.startKey
+  )
+  monthCursor = key
+    ? new Date(key.getFullYear(), key.getMonth(), 1)
+    : new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+  calendarOpen = true
+  paintCalendar(state)
+}
+
+function toggleCalendar(which: 'analysis' | 'timeline'): void {
+  if (calendarOpen) {
+    closeCalendar()
+    return
+  }
+  openCalendar(which)
+}
+
+function renderOverlayNav(snap: UiSnapshot): void {
+  const todayKey = localDateKey()
+  renderDateChip(analysisDateChip, snap.view, todayKey)
+  renderDateChip(timelineDateChip, snap.view, todayKey)
+
+  analysisDayPrev.hidden = true
+  analysisDayNext.hidden = true
+
+  const isRange = snap.view.startKey !== snap.view.endKey
+  timelineDayPrev.hidden = !isRange
+  timelineDayNext.hidden = !isRange
+  const keys = eachDateKey(snap.view.startKey, snap.view.endKey)
+  const idx = keys.indexOf(snap.timelineDateKey)
+  timelineDayPrev.disabled = idx <= 0
+  timelineDayNext.disabled = idx < 0 || idx >= keys.length - 1
+
+  analysisOpenLog.disabled = !snap.viewLogExists
+  timelineOpenLog.disabled = !snap.viewLogExists
+
+  if (calendarOpen) paintCalendar(snap)
+}
+
+function currentEmptyCopy(snap: UiSnapshot): string {
+  return emptyStateCopy({
+    range: snap.view,
+    timelineDateKey: snap.timelineDateKey,
+    viewLogExists: snap.viewLogExists,
+    isTimeline: snap.mode === 'timeline',
+    todayKey: localDateKey()
+  })
+}
+
+function stepTimeline(delta: number): void {
+  if (!state) return
+  const keys = eachDateKey(state.view.startKey, state.view.endKey)
+  const idx = keys.indexOf(state.timelineDateKey)
+  const next = keys[idx + delta]
+  if (next) void window.whatwhen.setTimelineDay(next)
+}
+
+// —— Analysis ——
+function sliceKey(slice: ProfileSlice): string {
+  return profileSliceKey(slice)
+}
+
+function analysisSignature(a: RangeAnalysis, view: DateRange): string {
+  return `${view.startKey}..${view.endKey}|${a.slices
     .map((s) => `${s.profileSlot}|${s.profileName}|${s.profileColor}|${s.notes.join('\u241F')}`)
-    .join('||')
+    .join('||')}`
 }
 
 function pieArcD(cx: number, cy: number, r: number, startAngle: number, sweep: number): string {
@@ -635,7 +797,7 @@ function flushDeferredAnalysisRebuild(): void {
     analysisRebuildPending = false
     return
   }
-  renderAnalysis(state.analysis)
+  renderAnalysis(state.viewAnalysis)
 }
 
 function bindSliceHover(el: Element, slice: ProfileSlice): void {
@@ -648,22 +810,24 @@ function bindSliceHover(el: Element, slice: ProfileSlice): void {
   })
 }
 
-function showAnalysis(analysis: DayAnalysis | null): void {
+function showAnalysis(snap: UiSnapshot): void {
   analysisEl.hidden = false
-  renderAnalysis(analysis)
+  renderOverlayNav(snap)
+  renderAnalysis(snap.viewAnalysis)
 }
 
-function renderAnalysis(analysis: DayAnalysis | null): void {
+function renderAnalysis(analysis: RangeAnalysis): void {
   analysisBody.innerHTML = ''
+  const view = state?.view ?? analysis.range
 
-  if (!analysis || analysis.slices.length === 0) {
+  if (analysis.slices.length === 0) {
     analysisNotes.hidden = true
     analysisNotes.classList.add('is-empty')
     const empty = document.createElement('div')
     empty.className = 'overlay-empty'
-    empty.textContent = 'No sessions yet today.'
+    empty.textContent = state ? currentEmptyCopy(state) : 'No sessions yet today.'
     analysisBody.appendChild(empty)
-    analysisSig = analysisSignature(analysis)
+    analysisSig = analysisSignature(analysis, view)
     analysisRebuildPending = false
     return
   }
@@ -725,12 +889,12 @@ function renderAnalysis(analysis: DayAnalysis | null): void {
   } else {
     hideSliceNotes()
   }
-  analysisSig = analysisSignature(analysis)
+  analysisSig = analysisSignature(analysis, view)
   analysisRebuildPending = false
 }
 
-function updateAnalysisLive(analysis: DayAnalysis | null): void {
-  if (!analysis || analysis.slices.length === 0) {
+function updateAnalysisLive(analysis: RangeAnalysis): void {
+  if (analysis.slices.length === 0) {
     renderAnalysis(analysis)
     return
   }
@@ -778,7 +942,7 @@ function updateAnalysisLive(analysis: DayAnalysis | null): void {
   }
 }
 
-function buildPieSvg(analysis: DayAnalysis): SVGSVGElement {
+function buildPieSvg(analysis: RangeAnalysis): SVGSVGElement {
   const size = 160
   const cx = size / 2
   const cy = size / 2
@@ -811,9 +975,10 @@ function buildPieSvg(analysis: DayAnalysis): SVGSVGElement {
 }
 
 // —— Timeline ——
-function showTimeline(sessions: Session[]): void {
+function showTimeline(snap: UiSnapshot): void {
   timelineEl.hidden = false
-  renderTimeline(sessions)
+  renderOverlayNav(snap)
+  renderTimeline(snap.viewSessions)
 }
 
 function formatTimeInput(iso: string): string {
@@ -854,7 +1019,7 @@ function renderTimeline(sessions: Session[]): void {
     timelineInspector.hidden = true
     const empty = document.createElement('div')
     empty.className = 'overlay-empty'
-    empty.textContent = 'No sessions yet today.'
+    empty.textContent = state ? currentEmptyCopy(state) : 'No sessions yet today.'
     timelineTrack.appendChild(empty)
     return
   }
@@ -948,6 +1113,7 @@ function renderTimeline(sessions: Session[]): void {
   if (selected) {
     renderTimelineInspector(selected)
   } else {
+    closeTimePop()
     timelineInspector.hidden = true
     timelineInspector.innerHTML = ''
   }
@@ -964,29 +1130,31 @@ function renderTimelineInspector(session: Session): void {
 
   const startWrap = document.createElement('label')
   startWrap.className = 'timeline-inspector-field'
-  startWrap.textContent = 'Start'
-  const startInput = document.createElement('input')
-  startInput.type = 'time'
-  startInput.value = formatTimeInput(session.startIso)
-  startInput.addEventListener('change', () => {
-    const nextStart = withTimeOfDay(session.startIso, startInput.value)
-    void window.whatwhen.updateSessionTimes(session.id, nextStart, session.endIso)
-  })
-  startWrap.appendChild(startInput)
+  startWrap.append('Start')
+  startWrap.appendChild(
+    createTimeField({
+      valueHhmm: formatTimeInput(session.startIso),
+      onChange: (hhmm) => {
+        const nextStart = withTimeOfDay(session.startIso, hhmm)
+        void window.whatwhen.updateSessionTimes(session.id, nextStart, session.endIso)
+      }
+    })
+  )
 
   const endWrap = document.createElement('label')
   endWrap.className = 'timeline-inspector-field'
-  endWrap.textContent = 'End'
-  const endInput = document.createElement('input')
-  endInput.type = 'time'
-  endInput.disabled = live
-  endInput.value = formatTimeInput(session.endIso ?? new Date().toISOString())
-  endInput.addEventListener('change', () => {
-    if (live || !session.endIso) return
-    const nextEnd = withTimeOfDay(session.endIso, endInput.value)
-    void window.whatwhen.updateSessionTimes(session.id, session.startIso, nextEnd)
-  })
-  endWrap.appendChild(endInput)
+  endWrap.append('End')
+  endWrap.appendChild(
+    createTimeField({
+      valueHhmm: formatTimeInput(session.endIso ?? new Date().toISOString()),
+      disabled: live,
+      onChange: (hhmm) => {
+        if (live || !session.endIso) return
+        const nextEnd = withTimeOfDay(session.endIso, hhmm)
+        void window.whatwhen.updateSessionTimes(session.id, session.startIso, nextEnd)
+      }
+    })
+  )
   times.append(startWrap, endWrap)
 
   const chips = document.createElement('div')
@@ -1001,6 +1169,7 @@ function renderTimelineInspector(session: Session): void {
     if (profile.slot === session.profileSlot) chip.classList.add('active')
     chip.addEventListener('click', (e) => {
       e.stopPropagation()
+      closeTimePop()
       void window.whatwhen.reassignSession(session.id, profile.slot)
     })
     chips.appendChild(chip)
@@ -1010,22 +1179,24 @@ function renderTimelineInspector(session: Session): void {
   splitRow.className = 'timeline-inspector-row'
   const splitWrap = document.createElement('label')
   splitWrap.className = 'timeline-inspector-field'
-  splitWrap.textContent = 'Split at'
-  const splitInput = document.createElement('input')
-  splitInput.type = 'time'
-  splitInput.value = formatTimeInput(splitValue)
-  splitInput.addEventListener('change', () => {
-    splitAtIso = withTimeOfDay(session.startIso, splitInput.value)
-    if (state) renderTimeline(state.todaySessions)
-  })
-  splitWrap.appendChild(splitInput)
+  splitWrap.append('Split at')
+  splitWrap.appendChild(
+    createTimeField({
+      valueHhmm: formatTimeInput(splitValue),
+      onChange: (hhmm) => {
+        splitAtIso = withTimeOfDay(session.startIso, hhmm)
+        if (state) renderTimeline(state.viewSessions)
+      }
+    })
+  )
   const splitBtn = document.createElement('button')
   splitBtn.type = 'button'
   splitBtn.className = 'btn-primary timeline-split-btn'
   splitBtn.textContent = 'Split'
   splitBtn.addEventListener('click', (e) => {
     e.stopPropagation()
-    const at = splitAtIso ?? withTimeOfDay(session.startIso, splitInput.value)
+    closeTimePop()
+    const at = splitAtIso ?? sessionMidIso(session)
     splitAtIso = null
     void window.whatwhen.splitSession(session.id, at)
   })
@@ -1107,8 +1278,52 @@ analysisClose.addEventListener('click', () => {
   void window.whatwhen.closeUi()
 })
 
+analysisDateChip.addEventListener('click', (e) => {
+  e.stopPropagation()
+  toggleCalendar('analysis')
+})
+timelineDateChip.addEventListener('click', (e) => {
+  e.stopPropagation()
+  toggleCalendar('timeline')
+})
+
+analysisOpenLog.addEventListener('click', (e) => {
+  e.stopPropagation()
+  if (state) void window.whatwhen.openDayLog(state.timelineDateKey)
+})
+timelineOpenLog.addEventListener('click', (e) => {
+  e.stopPropagation()
+  if (state) void window.whatwhen.openDayLog(state.timelineDateKey)
+})
+
+timelineDayPrev.addEventListener('click', (e) => {
+  e.stopPropagation()
+  stepTimeline(-1)
+})
+timelineDayNext.addEventListener('click', (e) => {
+  e.stopPropagation()
+  stepTimeline(1)
+})
+
 timelineClose.addEventListener('click', () => {
   void window.whatwhen.closeUi()
+})
+
+window.addEventListener('click', (e) => {
+  const t = e.target as Node
+  if (!(e.target as HTMLElement).closest('.time-field')) {
+    closeTimePop()
+  }
+  if (!calendarOpen) return
+  if (
+    analysisCalendarPop.contains(t) ||
+    timelineCalendarPop.contains(t) ||
+    analysisDateChip.contains(t) ||
+    timelineDateChip.contains(t)
+  ) {
+    return
+  }
+  closeCalendar()
 })
 
 timelineEl.addEventListener('click', (e) => {
@@ -1116,13 +1331,16 @@ timelineEl.addEventListener('click', (e) => {
   if (
     t.closest('.timeline-bubble') ||
     t.closest('.timeline-inspector') ||
-    t.closest('.overlay-close')
+    t.closest('.time-field') ||
+    t.closest('.overlay-close') ||
+    t.closest('.overlay-nav') ||
+    t.closest('.calendar-pop')
   ) {
     return
   }
   if (selectedTimelineId && state) {
     setSelectedTimeline(null)
-    renderTimeline(state.todaySessions)
+    renderTimeline(state.viewSessions)
   }
 })
 
@@ -1202,7 +1420,7 @@ window.addEventListener('keydown', (e) => {
   ) {
     if (state.mode === 'timeline' && selectedTimelineId) {
       setSelectedTimeline(null)
-      renderTimeline(state.todaySessions)
+      renderTimeline(state.viewSessions)
       return
     }
     void window.whatwhen.closeUi()

@@ -59,10 +59,23 @@ You can also run the workflow manually under **Actions → Release** (downloads 
 | Esc (in bubble) | Back to stack without saving |
 | Esc (on stack) | Collapse to orb only |
 | Right-click orb | Open today’s log, folder, quit |
+| Date chip (Analysis / Timeline) | Pick a past day or a date range |
+
+## Calendar
+
+Open Analysis or Timeline, then click the date chip for a month grid.
+
+- Click a day to view that day.
+- Shift+click a day to extend the current range to that day.
+- Use **Last 7 days** or **This week** for a quick range. Use **Today** to return to today.
+- Analysis aggregates every day in the selected range.
+- Timeline shows one day. When a range is selected, use ‹ › to move between days in that range.
+- The view resets to today when you close the overlay.
 
 ## Data
 
 - Config & crash recovery: `%APPDATA%\whatwhen\WhatWhen\`
 - Logs: `%USERPROFILE%\Documents\WhatWhen\`
+- Daily JSON (`YYYY-MM-DD.json`) is the source of truth. Markdown (`.md`) is generated from it.
 
 Rename profiles later via config JSON (`config.json` → `profiles`) or a future settings UI.
