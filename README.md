@@ -81,11 +81,11 @@ Open Analysis or Timeline, then click the date chip for a month grid.
 
 A slot is a hotkey position, not a permanent story.
 
-- Edit the name and color of a slot in **Edit profiles…**.
+- Edit the name and color of a slot in **Edit profiles…**. A rename or color change updates all past sessions of the **current** story on that slot.
 - Click the color swatch to open a palette. Each color has a filled swatch and an outline swatch. There is no OS color dialog.
 - Slots 8–12 start as outlines of colors 1–5. Any slot can use a fill or an outline.
 - Click **⟲** to start a new profile on that slot. You may reuse the same color. Dots or hatching appear only when a retired story and a later story on the **same slot** share a color in Analysis or Timeline.
-- **Past sessions keep the name and color they were recorded under.** Analysis over a range that crosses a retirement shows both profiles as separate slices.
+- **Retired stories keep the name and color they were recorded under.** Analysis over a range that crosses a retirement shows both profiles as separate slices.
 - Reassign a past session in the Timeline and it moves to the story that occupies that slot *now*.
 - A running timer stays on the old story until you switch.
 - A segment can share time with a second story. The bar and orb show half of each color. Analysis counts half the duration for each story.

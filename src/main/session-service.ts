@@ -25,6 +25,7 @@ import {
   SLOT_DISPLAY
 } from '../shared/types'
 import {
+  applyCurrentStoryIdentities,
   deleteSession,
   listLogDates,
   listPending,
@@ -72,6 +73,10 @@ export class SessionService {
     } else {
       this.active = runtime.activeSession
     }
+    if (applyCurrentStoryIdentities(this.config.settings.logDir, this.config.profiles)) {
+      this.markLogsDirty()
+    }
+    this.syncLiveStoryIdentities()
     this.startTick()
   }
 
@@ -97,6 +102,11 @@ export class SessionService {
     return this.config
   }
 
+  /**
+   * Edit the current story on each slot. Name, color, and outline apply to
+   * all logged sessions on that slot at the current epoch. Use retireProfile
+   * to freeze the old story and start a new one.
+   */
   updateProfiles(profiles: Profile[]): void {
     this.config.profiles = this.config.profiles.map((stored) => {
       const incoming = profiles.find((p) => p.slot === stored.slot)
@@ -109,6 +119,11 @@ export class SessionService {
       }
     })
     saveConfig(this.config)
+    const logDir = this.config.settings.logDir
+    if (applyCurrentStoryIdentities(logDir, this.config.profiles)) {
+      this.markLogsDirty()
+    }
+    this.syncLiveStoryIdentities()
     this.emit()
   }
 
@@ -272,6 +287,55 @@ export class SessionService {
 
   private markLogsDirty(): void {
     this.pastCache = null
+  }
+
+  private syncLiveStoryIdentities(): void {
+    const patch = (s: Session): Session => {
+      const primary = this.getProfile(s.profileSlot)
+      let next = s
+      if (
+        profileEpochOf(s) === primary.epoch &&
+        (s.profileName !== primary.name ||
+          s.profileColor !== primary.color ||
+          s.profileOutline !== primary.outline)
+      ) {
+        next = {
+          ...next,
+          profileName: primary.name,
+          profileColor: primary.color,
+          profileOutline: primary.outline
+        }
+      }
+      if (s.shareSlot != null) {
+        const share = this.getProfile(s.shareSlot)
+        if (
+          profileEpochOf({ profileEpoch: s.shareEpoch }) === share.epoch &&
+          (s.shareName !== share.name ||
+            s.shareColor !== share.color ||
+            s.shareOutline !== share.outline)
+        ) {
+          next = {
+            ...next,
+            shareName: share.name,
+            shareColor: share.color,
+            shareOutline: share.outline
+          }
+        }
+      }
+      return next
+    }
+
+    if (this.active) {
+      const next = patch(this.active)
+      if (next !== this.active) {
+        this.active = next
+        saveRuntime({ activeSession: this.active })
+      }
+    }
+    if (this.bubbleSession) {
+      const next = patch(this.bubbleSession)
+      if (next !== this.bubbleSession) this.bubbleSession = next
+    }
   }
 
   getProfile(slot: ProfileSlot): Profile {

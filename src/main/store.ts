@@ -9,8 +9,10 @@ import {
   defaultProfiles,
   formatDuration,
   formatTimeLocal,
+  isOutlineStyle,
   isValidDateKey,
   localDateKey,
+  profileEpochOf,
   sessionShareOf,
   sessionTitleOf,
   DEFAULT_COLORS,
@@ -190,6 +192,78 @@ export function upsertSession(logDir: string, session: Session): DayLog {
   else log.sessions.push(session)
   saveDayLog(logDir, log)
   return log
+}
+
+function storyIdentityMatches(
+  name: string | undefined,
+  color: string | undefined,
+  outline: boolean,
+  identity: Profile
+): boolean {
+  return (
+    (name ?? '') === identity.name &&
+    (color || '').toLowerCase() === identity.color.toLowerCase() &&
+    outline === identity.outline
+  )
+}
+
+/**
+ * Apply each profile's current name/color/outline to logged sessions on the
+ * same slot and epoch. Retired epochs stay frozen.
+ */
+export function applyCurrentStoryIdentities(logDir: string, profiles: Profile[]): boolean {
+  const bySlot = new Map(profiles.map((p) => [p.slot, p]))
+  let dirtyAny = false
+  for (const dateKey of listLogDates(logDir)) {
+    const log = loadDayLog(logDir, dateKey)
+    let dirty = false
+    const sessions = log.sessions.map((s) => {
+      let next = s
+      const primary = bySlot.get(s.profileSlot)
+      if (primary && profileEpochOf(s) === primary.epoch) {
+        if (
+          !storyIdentityMatches(s.profileName, s.profileColor, isOutlineStyle(s), primary)
+        ) {
+          next = {
+            ...next,
+            profileName: primary.name,
+            profileColor: primary.color,
+            profileOutline: primary.outline
+          }
+        }
+      }
+      if (s.shareSlot != null) {
+        const share = bySlot.get(s.shareSlot)
+        if (
+          share &&
+          profileEpochOf({ profileEpoch: s.shareEpoch }) === share.epoch &&
+          !storyIdentityMatches(
+            s.shareName,
+            s.shareColor,
+            isOutlineStyle({
+              profileOutline: s.shareOutline,
+              profileSlot: s.shareSlot
+            }),
+            share
+          )
+        ) {
+          next = {
+            ...next,
+            shareName: share.name,
+            shareColor: share.color,
+            shareOutline: share.outline
+          }
+        }
+      }
+      if (next !== s) dirty = true
+      return next
+    })
+    if (dirty) {
+      saveDayLog(logDir, { ...log, sessions })
+      dirtyAny = true
+    }
+  }
+  return dirtyAny
 }
 
 export function deleteSession(logDir: string, id: string, dateKey = localDateKey()): boolean {
