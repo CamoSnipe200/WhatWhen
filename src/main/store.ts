@@ -10,7 +10,8 @@ import {
   formatDuration,
   formatTimeLocal,
   isValidDateKey,
-  localDateKey
+  localDateKey,
+  SUPERSEDED_PASTEL_COLORS
 } from '../shared/types'
 import {
   getConfigPath,
@@ -53,11 +54,23 @@ export function loadConfig(): AppConfig {
     if (!settings.logDir) settings.logDir = getDefaultLogDir()
     if (settings.orbAnchorX === undefined) settings.orbAnchorX = null
     if (settings.orbAnchorY === undefined) settings.orbAnchorY = null
-    return { profiles, settings }
+    const config = { profiles, settings }
+    const oldPastel = (raw.profiles ?? [])
+      .filter((p) => p.slot >= 8 && p.slot <= 12)
+      .map((p) => (p.color || '').toLowerCase())
+      .join('|')
+    const newPastel = profiles
+      .filter((p) => p.slot >= 8 && p.slot <= 12)
+      .map((p) => p.color.toLowerCase())
+      .join('|')
+    if (oldPastel !== newPastel) saveConfig(config)
+    return config
   } catch {
     return { profiles: defaultProfiles(), settings: defaultSettings() }
   }
 }
+
+const SUPERSEDED = new Set(SUPERSEDED_PASTEL_COLORS.map((c) => c.toLowerCase()))
 
 function mergeProfiles(saved?: Profile[]): Profile[] {
   const defaults = defaultProfiles()
@@ -65,13 +78,17 @@ function mergeProfiles(saved?: Profile[]): Profile[] {
   // Keep the active slots; preserve custom names/colors when present
   return defaults.map((d) => {
     const found = saved.find((p) => p.slot === d.slot)
-    return found
-      ? {
-          slot: d.slot,
-          name: found.name?.trim() || d.name,
-          color: found.color || d.color
-        }
-      : d
+    if (!found) return d
+    const savedColor = found.color || d.color
+    const useDefaultColor =
+      d.slot >= 8 && d.slot <= 12 && SUPERSEDED.has(savedColor.toLowerCase())
+    return {
+      slot: d.slot,
+      name: found.name?.trim() || d.name,
+      color: useDefaultColor ? d.color : savedColor,
+      outline: typeof found.outline === 'boolean' ? found.outline : d.outline,
+      epoch: Number.isInteger(found.epoch) && found.epoch >= 0 ? found.epoch : 0
+    }
   })
 }
 

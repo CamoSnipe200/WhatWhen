@@ -5,8 +5,8 @@ A tiny always-on-top **workday profile timer** for Windows. Switch profiles with
 ## Features
 
 - **Frosted glass orb** in the bottom-right of the primary display
-- **6 profiles** with a chromatic rainbow palette (aeroglass radial picker)
-- **Global hotkeys**: `Ctrl+Shift+Alt+1`–`7` to switch; `Ctrl+Shift+Alt+\`` to stop
+- **12 profiles** on three wheel rings; palette defaults sit at the top of Edit profiles
+- **Global hotkeys**: `Ctrl+Shift+Alt+1`–`9` to switch; `Ctrl+Shift+Alt+\`` to stop
 - On switch/stop: **chat bubble** above the orb for brief notes (Enter save, Esc skip back)
 - **Session stack**: click the pending badge to see pending note circles (oldest top → newest bottom); click one to edit
 - **Daily Markdown** logs in `Documents\WhatWhen\YYYY-MM-DD.md`
@@ -43,7 +43,7 @@ You can also run the workflow manually under **Actions → Release** (downloads 
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+Shift+Alt+1` … `7` | Switch to profile 1–7 |
+| `Ctrl+Shift+Alt+1` … `9` | Switch to profile 1–9 |
 | `Ctrl+Shift+Alt+\`` | Stop timer (idle) |
 
 ## UI
@@ -72,10 +72,22 @@ Open Analysis or Timeline, then click the date chip for a month grid.
 - Timeline shows one day. When a range is selected, use ‹ › to move between days in that range.
 - The view resets to today when you close the overlay.
 
+## Stories & colors
+
+A slot is a hotkey position, not a permanent story.
+
+- Edit the name and color of a slot in **Edit profiles…**.
+- Click the color swatch to open a palette. Each color has a filled swatch and an outline swatch. There is no OS color dialog.
+- Slots 8–12 start as outlines of colors 1–5. Any slot can use a fill or an outline.
+- Click **⟲** to start a new profile on that slot. You may reuse the same color. Shared colors on slots 1–7 get dots or hatching (up to 5 marks, then they repeat).
+- **Past sessions keep the name and color they were recorded under.** Analysis over a range that crosses a retirement shows both profiles as separate slices.
+- Reassign a past session in the Timeline and it moves to the story that occupies that slot *now*.
+- A running timer stays on the old story until you switch.
+
 ## Data
 
 - Config & crash recovery: `%APPDATA%\whatwhen\WhatWhen\`
 - Logs: `%USERPROFILE%\Documents\WhatWhen\`
 - Daily JSON (`YYYY-MM-DD.json`) is the source of truth. Markdown (`.md`) is generated from it.
-
-Rename profiles later via config JSON (`config.json` → `profiles`) or a future settings UI.
+- `config.json` → `profiles[].epoch` (integer, bumped on retire).
+- `YYYY-MM-DD.json` → `sessions[].profileEpoch` (absent on pre-Wave-4 logs, read as 0).

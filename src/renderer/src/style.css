@@ -139,6 +139,15 @@ body {
   opacity: 0.62;
 }
 
+.orb.is-outline .orb-tint {
+  opacity: 0;
+  background: transparent;
+}
+
+.orb.is-outline .orb-glass {
+  border: 2.5px solid var(--c);
+}
+
 .orb-ring {
   position: absolute;
   inset: 0;
@@ -215,6 +224,7 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.38);
   cursor: pointer;
   pointer-events: auto;
+  overflow: hidden;
   /* Flat tint + frosted glass — matches main orb */
   background:
     linear-gradient(
@@ -248,6 +258,56 @@ body {
       rgba(255, 255, 255, 0.04) 100%
     ),
     color-mix(in srgb, var(--c, #888) 55%, transparent);
+}
+
+.wheel-dot.is-light {
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.55) 0%,
+      rgba(255, 255, 255, 0.18) 48%,
+      rgba(255, 255, 255, 0.08) 100%
+    ),
+    color-mix(in srgb, var(--c, #fff) 72%, transparent);
+}
+
+.wheel-dot.is-light:hover {
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.62) 0%,
+      rgba(255, 255, 255, 0.22) 50%,
+      rgba(255, 255, 255, 0.1) 100%
+    ),
+    color-mix(in srgb, var(--c, #fff) 78%, transparent);
+}
+
+.wheel-dot.is-light .slot-num {
+  color: rgba(50, 42, 48, 0.78);
+  text-shadow: none;
+}
+
+.wheel-dot.is-outline {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+  border: 2.5px solid var(--c);
+}
+
+.wheel-dot.is-outline:hover {
+  background: transparent;
+  border-color: var(--c);
+}
+
+.wheel-dot.is-outline .slot-num {
+  color: var(--c);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+.wheel-dot.is-outline.active-slot {
+  border-color: var(--c);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.45);
 }
 
 .wheel-dot:active {
@@ -330,6 +390,58 @@ body {
   color: rgba(255, 255, 255, 0.92);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
   pointer-events: none;
+  z-index: 1;
+}
+
+.wheel-dot[data-fill-pattern]::after,
+.settings-swatch[data-fill-pattern]::after,
+.bar-swatch[data-fill-pattern]::after,
+.bar-fill[data-fill-pattern]::after,
+.timeline-bar[data-fill-pattern]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+[data-fill-pattern='1']::after {
+  background-image: radial-gradient(
+    circle at 2px 2px,
+    rgba(255, 255, 255, 0.55) 1.1px,
+    transparent 1.3px
+  );
+  background-size: 6px 6px;
+}
+
+[data-fill-pattern='2']::after {
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0 3px,
+    rgba(255, 255, 255, 0.4) 3px 4px
+  );
+}
+
+[data-fill-pattern='3']::after {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 3px,
+    rgba(255, 255, 255, 0.4) 3px 4px
+  );
+}
+
+[data-fill-pattern='4']::after {
+  background-image:
+    repeating-linear-gradient(
+      45deg,
+      transparent 0 3px,
+      rgba(255, 255, 255, 0.35) 3px 4px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      transparent 0 3px,
+      rgba(255, 255, 255, 0.35) 3px 4px
+    );
 }
 
 @keyframes wheel-in {
@@ -365,8 +477,8 @@ body {
 }
 
 .stack.above-wheel {
-  /* Sit above the outer category ring so pending dots don't cover 5/6/7/× */
-  bottom: calc(var(--orb) + 126px);
+  /* Sit above the far category ring so pending dots don't cover 8–12 */
+  bottom: calc(var(--orb) + 170px);
 }
 
 .stack.is-leaving {
@@ -397,6 +509,14 @@ body {
 
 .stack-dot:hover {
   border-color: rgba(255, 255, 255, 0.65);
+}
+
+.stack-dot.is-outline {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+  border: 2.5px solid var(--dot-color);
 }
 
 /* —— Chat bubble —— */
@@ -455,6 +575,11 @@ body {
   border-radius: 50%;
   flex-shrink: 0;
   border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.swatch.is-outline {
+  background: transparent;
+  border: 2px solid var(--c);
 }
 
 .bubble-meta {
@@ -551,7 +676,7 @@ body {
 }
 
 .settings-row .slot-label {
-  width: 16px;
+  width: 20px;
   font-size: 11px;
   font-weight: 700;
   color: var(--muted);
@@ -559,25 +684,112 @@ body {
   flex-shrink: 0;
 }
 
-.settings-row input[type='color'] {
+.settings-swatch {
+  position: relative;
   width: 28px;
   height: 28px;
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 50%;
-  background: transparent;
   cursor: pointer;
+  flex-shrink: 0;
   overflow: hidden;
+}
+
+.settings-swatch:disabled {
+  cursor: default;
+}
+
+.settings-swatch.is-outline {
+  background: transparent;
+  border: 2.5px solid var(--c);
+}
+
+.settings-retire {
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
   flex-shrink: 0;
 }
 
-.settings-row input[type='color']::-webkit-color-swatch-wrapper {
-  padding: 2px;
+.settings-retire:hover {
+  background: rgba(255, 255, 255, 0.16);
 }
 
-.settings-row input[type='color']::-webkit-color-swatch {
+.palette-wrap {
+  padding: 4px 0 4px 24px;
+  border-left: 2px solid rgba(255, 255, 255, 0.14);
+}
+
+.palette-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 26px);
+  gap: 4px;
+}
+
+.palette-cell {
+  width: 26px;
+  height: 26px;
+  padding: 0;
   border: none;
   border-radius: 50%;
+  cursor: pointer;
+  position: relative;
+}
+
+.palette-cell.is-outline {
+  background: transparent;
+  border: 2.5px solid var(--c);
+}
+
+.palette-cell.is-selected {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+}
+
+.settings-row.is-retiring {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.settings-retire-caption,
+.settings-retire-hint {
+  font-size: 11px;
+  color: var(--muted);
+  padding-left: 24px;
+}
+
+.settings-retire-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-retire-cancel {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-retire-cancel:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .settings-row input[type='text'] {
@@ -751,11 +963,13 @@ body {
 }
 
 .bar-swatch {
+  position: relative;
   width: 10px;
   height: 10px;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.35);
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .bar-track {
@@ -766,9 +980,22 @@ body {
 }
 
 .bar-fill {
+  position: relative;
   height: 100%;
   border-radius: 999px;
   opacity: 0.9;
+  overflow: hidden;
+}
+
+.bar-swatch.is-outline {
+  background: transparent;
+  border: 2px solid var(--c);
+}
+
+.bar-fill.is-outline {
+  background: transparent;
+  border: 2px solid var(--c);
+  opacity: 1;
 }
 
 .bar-pct {
@@ -867,6 +1094,13 @@ body {
   background: color-mix(in srgb, var(--c, #888) 68%, #232630);
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.28);
   pointer-events: none;
+  overflow: hidden;
+}
+
+.timeline-bar.is-outline {
+  background: transparent;
+  box-shadow: none;
+  border: 2.5px solid var(--c);
 }
 
 .timeline-bubble.selected .timeline-bar {
@@ -874,6 +1108,11 @@ body {
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.28),
     0 0 0 2px color-mix(in srgb, var(--c, #fff) 45%, transparent);
+}
+
+.timeline-bubble.selected .timeline-bar.is-outline {
+  border-color: var(--c);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.45);
 }
 
 .timeline-split-mark {

@@ -1,4 +1,4 @@
-export type ProfileSlot = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+export type ProfileSlot = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
 
 export type NotesStatus = 'pending' | 'saved' | 'skipped'
 
@@ -6,6 +6,10 @@ export interface Profile {
   slot: ProfileSlot
   name: string
   color: string
+  /** Hollow ring of `color`. Slots 8–12 start true. */
+  outline: boolean
+  /** Bumped on retire. Past sessions keep the epoch they were recorded under. */
+  epoch: number
 }
 
 export interface Session {
@@ -13,10 +17,14 @@ export interface Session {
   profileSlot: ProfileSlot
   profileName: string
   profileColor: string
+  /** Hollow ring of `profileColor`. Absent on older logs → infer from slot. */
+  profileOutline?: boolean
   startIso: string
   endIso: string | null
   notes: string
   notesStatus: NotesStatus
+  /** Story generation on that slot. Absent on pre-Wave-4 logs → 0. */
+  profileEpoch?: number
 }
 
 export interface DayLog {
@@ -54,10 +62,12 @@ export interface ProfileSlice {
   profileSlot: ProfileSlot | null
   profileName: string
   profileColor: string
+  profileOutline: boolean
   durationMs: number
   percentOfDay: number
   percentOfTracked: number
   notes: string[]
+  profileEpoch: number
 }
 
 export interface DayAnalysis {
@@ -128,10 +138,13 @@ export const SLOT_DISPLAY: Record<ProfileSlot, string> = {
   7: '7',
   8: '8',
   9: '9',
+  10: '10',
+  11: '11',
+  12: '12',
   0: '0'
 }
 
-/** Seven-slot chromatic palette */
+/** Seed colors for slots 1–12. Slots 8–12 reuse 1–5 as outlines in the UI. */
 export const DEFAULT_COLORS: string[] = [
   '#FF4D6A', // 1 crimson rose
   '#FF8C42', // 2 orange
@@ -139,17 +152,106 @@ export const DEFAULT_COLORS: string[] = [
   '#8FE388', // 4 spring green
   '#2EC4B6', // 5 teal
   '#5B6CFF', // 6 indigo
-  '#C084FC' // 7 violet
+  '#C084FC', // 7 violet
+  '#FF4D6A', // 8 outline of 1
+  '#FF8C42', // 9 outline of 2
+  '#FFD166', // 10 outline of 3
+  '#8FE388', // 11 outline of 4
+  '#2EC4B6' // 12 outline of 5
 ]
 
-/** Active profile slots (hotkeys Ctrl+Shift+Alt+1–7) */
-export const PROFILE_SLOTS: ProfileSlot[] = [1, 2, 3, 4, 5, 6, 7]
+/** Prior 8–12 seeds. Replaced on load so outline colors match 1–5. */
+export const SUPERSEDED_PASTEL_COLORS: string[] = [
+  '#FF6F91',
+  '#4CAF50',
+  '#22B8CF',
+  '#A855F7',
+  '#9AA5B1',
+  '#FFC1CC',
+  '#FFD4B8',
+  '#FFF3C4',
+  '#D4F5D0',
+  '#C5F0EB',
+  '#FFE6EA',
+  '#FFE8D6',
+  '#FFF6E0',
+  '#E8F8E6',
+  '#D6F4F1',
+  '#FFCAD2',
+  '#FFDCC6',
+  '#FFF1D1',
+  '#DDF7DB',
+  '#C0EDE9',
+  '#FFB8C3',
+  '#FFD1B3',
+  '#FFEDC2',
+  '#D2F4CF',
+  '#ABE7E2'
+]
+
+/** Active profile slots. Hotkeys cover 1–9; 10–12 are wheel-only. */
+export const PROFILE_SLOTS: ProfileSlot[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+export const HOTKEY_SLOTS: ProfileSlot[] = PROFILE_SLOTS.filter((s) => s <= 9)
+
+/** Picker palette — unique defaults first, then extras. */
+export const PALETTE: string[] = [
+  ...DEFAULT_COLORS.slice(0, 7),
+  '#E5484D',
+  '#FFA94D',
+  '#F59F00',
+  '#E8D44D',
+  '#C0CA33',
+  '#2E7D5B',
+  '#4DABF7',
+  '#3B5BDB',
+  '#7048E8',
+  '#E879F9',
+  '#F06595',
+  '#7B8794'
+]
+
+/** Shared-color marks in analysis / wheel. 0 = solid. Repeats after 5. */
+export const FILL_PATTERN_COUNT = 5
+
+/** Default fill style: slots 8–12 start as outlines of 1–5. */
+export function isOutlineSlot(slot: ProfileSlot | number | null | undefined): boolean {
+  return slot != null && slot >= 8 && slot <= 12
+}
+
+/** Stored outline flag, or the slot default for older records. */
+export function isOutlineStyle(source: {
+  outline?: boolean
+  profileOutline?: boolean
+  slot?: ProfileSlot | number
+  profileSlot?: ProfileSlot | number | null
+}): boolean {
+  if (typeof source.outline === 'boolean') return source.outline
+  if (typeof source.profileOutline === 'boolean') return source.profileOutline
+  return isOutlineSlot(source.slot ?? source.profileSlot)
+}
+
+export function isLightProfileColor(c: string): boolean {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(c.trim())
+  if (!m) return false
+  const n = parseInt(m[1], 16)
+  const r = (n >> 16) & 255
+  const g = (n >> 8) & 255
+  const b = n & 255
+  return (r + g + b) / 3 >= 200
+}
+
+export function normalizeProfileColor(c: unknown, fallback = '#888888'): string {
+  return typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c) ? c : fallback
+}
 
 export function defaultProfiles(): Profile[] {
   return PROFILE_SLOTS.map((slot, i) => ({
     slot,
     name: `Profile ${SLOT_DISPLAY[slot]}`,
-    color: DEFAULT_COLORS[i]
+    color: DEFAULT_COLORS[i],
+    outline: isOutlineSlot(slot),
+    epoch: 0
   }))
 }
 
@@ -253,11 +355,18 @@ export function formatDateKeyLong(key: string): string {
   return `${WEEKDAY_SHORT[d.getDay()]}, ${MONTH_SHORT[d.getMonth()]} ${d.getDate()}`
 }
 
+export function profileEpochOf(s: { profileEpoch?: number }): number {
+  return Number.isInteger(s.profileEpoch) && (s.profileEpoch as number) >= 0
+    ? (s.profileEpoch as number)
+    : 0
+}
+
 export function profileSliceKey(s: {
   profileSlot: ProfileSlot | null
   profileName: string
+  profileEpoch?: number
 }): string {
-  return `${s.profileSlot}:${s.profileName}`
+  return `${s.profileSlot}:${profileEpochOf(s)}:${s.profileName}`
 }
 
 /** Start of local calendar day for a date key or Date */
@@ -292,6 +401,8 @@ export function computeDayAnalysis(
     profileSlot: ProfileSlot | null
     profileName: string
     profileColor: string
+    profileOutline: boolean
+    profileEpoch: number
     durationMs: number
     notes: string[]
   }
@@ -313,6 +424,8 @@ export function computeDayAnalysis(
         profileSlot: s.profileSlot,
         profileName: s.profileName,
         profileColor: s.profileColor,
+        profileOutline: isOutlineStyle(s),
+        profileEpoch: profileEpochOf(s),
         durationMs: 0,
         notes: []
       }
@@ -331,10 +444,12 @@ export function computeDayAnalysis(
       profileSlot: a.profileSlot,
       profileName: a.profileName,
       profileColor: a.profileColor,
+      profileOutline: a.profileOutline,
       durationMs: a.durationMs,
       percentOfDay: (a.durationMs / dayMs) * 100,
       percentOfTracked: trackedMs > 0 ? (a.durationMs / trackedMs) * 100 : 0,
-      notes: a.notes
+      notes: a.notes,
+      profileEpoch: a.profileEpoch
     }))
 
   return {
@@ -359,6 +474,8 @@ export function computeRangeAnalysis(logs: DayLog[], now = new Date()): RangeAna
     profileSlot: ProfileSlot | null
     profileName: string
     profileColor: string
+    profileOutline: boolean
+    profileEpoch: number
     durationMs: number
     notes: string[]
   }
@@ -382,6 +499,8 @@ export function computeRangeAnalysis(logs: DayLog[], now = new Date()): RangeAna
           profileSlot: slice.profileSlot,
           profileName: slice.profileName,
           profileColor: slice.profileColor,
+          profileOutline: slice.profileOutline,
+          profileEpoch: slice.profileEpoch,
           durationMs: 0,
           notes: []
         }
@@ -403,10 +522,12 @@ export function computeRangeAnalysis(logs: DayLog[], now = new Date()): RangeAna
       profileSlot: a.profileSlot,
       profileName: a.profileName,
       profileColor: a.profileColor,
+      profileOutline: a.profileOutline,
       durationMs: a.durationMs,
       percentOfDay: spanMs > 0 ? (a.durationMs / spanMs) * 100 : 0,
       percentOfTracked: trackedMs > 0 ? (a.durationMs / trackedMs) * 100 : 0,
-      notes: a.notes
+      notes: a.notes,
+      profileEpoch: a.profileEpoch
     }))
 
   return {

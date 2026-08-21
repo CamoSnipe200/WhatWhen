@@ -24,6 +24,7 @@ import { getDayMarkdownPath, getDefaultLogDir } from './paths'
 import {
   isValidDateKey,
   localDateKey,
+  PROFILE_SLOTS,
   type Profile,
   type ProfileSlot
 } from '../shared/types'
@@ -688,6 +689,20 @@ function setupIpc(): void {
     return service.snapshot()
   })
 
+  ipcMain.handle(
+    'retire-profile',
+    (_e, slot: ProfileSlot, name: string, color: string, outline?: boolean) => {
+    if (!PROFILE_SLOTS.includes(slot)) return service.snapshot()
+    service.retireProfile(
+      slot,
+      typeof name === 'string' ? name : '',
+      color,
+      typeof outline === 'boolean' ? outline : undefined
+    )
+    pushState()
+    return service.snapshot()
+  })
+
   ipcMain.handle('update-session-times', (_e, id: string, startIso: string, endIso: string | null) => {
     service.updateSessionTimes(id, startIso, endIso)
     pushState()
@@ -858,6 +873,7 @@ function setupIpc(): void {
           { label: 'Drag the orb to move it', enabled: false },
           { label: 'Click the orb to open / close the wheel', enabled: false },
           { label: 'Click a number to start or switch profiles', enabled: false },
+          { label: 'Slots 10–12 sit on the outer ring (no hotkey)', enabled: false },
           { label: 'Click × to stop and keep the segment (asks for notes)', enabled: false },
           { label: 'Hold × for ~0.7 s to stop and discard the segment', enabled: false },
           { label: 'Badge = pending notes · click it to review', enabled: false },
@@ -866,7 +882,7 @@ function setupIpc(): void {
           { label: 'Timeline: click a bar to edit times, reassign, or split', enabled: false },
           {
             label:
-              'Hotkeys: Ctrl+Shift+Alt+1–7 switch · ` stops · N adds a comment · 0 recovers the orb',
+              'Hotkeys: Ctrl+Shift+Alt+1–9 switch · ` stops · N adds a comment · 0 recovers the orb',
             enabled: false
           }
         ]

@@ -47,8 +47,8 @@ export function computeLayout(
     if (pendingCount <= 0) return { width: WHEEL_W, height: WHEEL_H }
     const n = Math.min(pendingCount, MAX_STACK)
     const stackH = n * STACK_DOT + Math.max(0, n - 1) * STACK_GAP
-    // Stack sits above the outer ring (~178px from the HWND bottom).
-    const stackBottom = 178
+    // Stack sits above the far wheel ring.
+    const stackBottom = 220
     return {
       width: WHEEL_W,
       height: Math.max(WHEEL_H, stackBottom + stackH + 12)

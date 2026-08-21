@@ -1,5 +1,5 @@
 import { app, globalShortcut } from 'electron'
-import { PROFILE_SLOTS, type ProfileSlot } from '../shared/types'
+import { HOTKEY_SLOTS, type ProfileSlot } from '../shared/types'
 import type { SessionService } from './session-service'
 
 /** Prefer Ctrl (Windows); CommandOrControl as fallback string. */
@@ -55,7 +55,7 @@ export function registerShortcuts(
   let ok = true
   const registered: string[] = []
 
-  for (const slot of PROFILE_SLOTS) {
+  for (const slot of HOTKEY_SLOTS) {
     let done = false
     for (const accel of slotAccelerators(slot)) {
       try {

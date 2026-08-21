@@ -26,6 +26,12 @@ const api = {
   closeUi: (): Promise<UiSnapshot> => ipcRenderer.invoke('close-ui'),
   updateProfiles: (profiles: Profile[]): Promise<UiSnapshot> =>
     ipcRenderer.invoke('update-profiles', profiles),
+  retireProfile: (
+    slot: ProfileSlot,
+    name: string,
+    color: string,
+    outline?: boolean
+  ): Promise<UiSnapshot> => ipcRenderer.invoke('retire-profile', slot, name, color, outline),
   updateSessionTimes: (
     id: string,
     startIso: string,

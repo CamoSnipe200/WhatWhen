@@ -13,6 +13,9 @@ import {
   eachDateKey,
   formatDuration,
   formatTimeLocal,
+  isLightProfileColor,
+  isOutlineSlot,
+  isOutlineStyle,
   localDateKey,
   parseDateKey,
   profileSliceKey
@@ -25,6 +28,8 @@ import {
   thisWeekRange
 } from './calendar'
 import { closeTimePop, createTimeField, isTimePopOpen } from './time-field'
+import { renderPaletteGrid } from './palette'
+import { fillPatternIndex, setFillPattern, svgFillForPattern } from './fill-pattern'
 import { placeOnArc, type RadialArc } from './radial-arc'
 
 const MAX_VISIBLE = 7
@@ -67,6 +72,9 @@ const timelineCalendarPop = document.getElementById('timeline-calendar-pop') as 
 let state: UiSnapshot | null = null
 let editingId: string | null = null
 let draftProfiles: Profile[] | null = null
+let paletteOpenSlot: ProfileSlot | null = null
+let retiringSlot: ProfileSlot | null = null
+let retireDraft: { name: string; color: string; outline: boolean } | null = null
 let wheelBuilt = false
 let selectedTimelineId: string | null = null
 let splitAtIso: string | null = null
@@ -260,6 +268,9 @@ function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
   if (nextMode !== 'settings') {
     settingsEl.hidden = true
     draftProfiles = null
+    paletteOpenSlot = null
+    retiringSlot = null
+    retireDraft = null
   }
   if (nextMode !== 'analysis') {
     if (notesHideTimer !== null) {
@@ -317,9 +328,16 @@ function renderOrb(snap: UiSnapshot): void {
 
   if (snap.activeSession && !snap.activeSession.endIso) {
     orb.classList.add('active')
-    orbTint.style.background = snap.activeSession.profileColor
+    orb.style.setProperty('--c', snap.activeSession.profileColor)
+    if (isOutlineStyle(snap.activeSession)) {
+      orb.classList.add('is-outline')
+      orbTint.style.background = 'transparent'
+    } else {
+      orb.classList.remove('is-outline')
+      orbTint.style.background = snap.activeSession.profileColor
+    }
   } else {
-    orb.classList.remove('active')
+    orb.classList.remove('active', 'is-outline')
     orbTint.style.background = 'transparent'
   }
 
@@ -375,10 +393,15 @@ function renderWheel(snap: UiSnapshot): void {
   // Lowest (~184°) sits on the orb's bottom edge; highest (~96°) hugs the
   // right/up side of the window. Wider span than 105–173 opens the gaps.
   const inner: RadialArc = { radius: 82, startDeg: 96, endDeg: 184 }
-  const outer: RadialArc = {
+  const mid: RadialArc = {
     radius: inner.radius + DOT + 4,
     startDeg: 102,
     endDeg: 176
+  }
+  const far: RadialArc = {
+    radius: mid.radius + DOT + 4,
+    startDeg: 100,
+    endDeg: 178
   }
 
   const profiles = [...snap.profiles].sort((a, b) => a.slot - b.slot)
@@ -386,23 +409,32 @@ function renderWheel(snap: UiSnapshot): void {
     profiles.find((p) => p.slot === s) ?? {
       slot: s as ProfileSlot,
       name: `Profile ${s}`,
-      color: '#888'
+      color: '#888',
+      outline: isOutlineSlot(s),
+      epoch: 0
     }
 
-  const outerSlots = [1, 2, 3, 4].map(bySlot)
-  const innerSlots = [5, 6, 7]
-  const outerPos = placeOnArc(outerSlots.length, outer, origin, DOT)
+  const farSlots = [5, 4, 3, 2, 1].map(bySlot)
+  const midSlots = [9, 8, 7, 6].map(bySlot)
+  const innerSlots = [12, 11, 10]
+  const farPos = placeOnArc(farSlots.length, far, origin, DOT)
+  const midPos = placeOnArc(midSlots.length, mid, origin, DOT)
   const innerPos = placeOnArc(innerSlots.length + 1, inner, origin, DOT)
 
   type Placed =
-    | { kind: 'profile'; profile: Profile; pos: (typeof outerPos)[number] }
+    | { kind: 'profile'; profile: Profile; pos: (typeof midPos)[number] }
     | { kind: 'stop'; pos: (typeof innerPos)[number] }
 
   const items: Placed[] = [
-    ...outerSlots.map((profile, i) => ({
+    ...farSlots.map((profile, i) => ({
       kind: 'profile' as const,
       profile,
-      pos: outerPos[i]
+      pos: farPos[i]
+    })),
+    ...midSlots.map((profile, i) => ({
+      kind: 'profile' as const,
+      profile,
+      pos: midPos[i]
     })),
     ...innerSlots.map((slot, i) => ({
       kind: 'profile' as const,
@@ -411,6 +443,10 @@ function renderWheel(snap: UiSnapshot): void {
     })),
     { kind: 'stop', pos: innerPos[innerSlots.length] }
   ]
+
+  const colorGroup = items
+    .filter((item): item is Extract<Placed, { kind: 'profile' }> => item.kind === 'profile')
+    .map((item) => ({ color: item.profile.color, id: String(item.profile.slot) }))
 
   const activeSlot = snap.activeSession?.endIso
     ? undefined
@@ -472,6 +508,15 @@ function renderWheel(snap: UiSnapshot): void {
       btn.dataset.slot = String(profile.slot)
       if (profile.slot === activeSlot) btn.classList.add('active-slot')
       btn.style.setProperty('--c', profile.color)
+      if (isOutlineStyle(profile)) {
+        btn.classList.add('is-outline')
+      } else {
+        if (isLightProfileColor(profile.color)) btn.classList.add('is-light')
+        setFillPattern(
+          btn,
+          fillPatternIndex(profile.color, colorGroup, String(profile.slot))
+        )
+      }
       num.textContent = SLOT_DISPLAY[profile.slot]
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
@@ -527,6 +572,7 @@ function renderStack(pending: Session[], opts?: { allowEmpty?: boolean }): void 
     const dot = document.createElement('button')
     dot.type = 'button'
     dot.className = 'stack-dot'
+    if (isOutlineStyle(session)) dot.classList.add('is-outline')
     dot.style.setProperty('--dot-color', session.profileColor)
     dot.addEventListener('click', (e) => {
       e.stopPropagation()
@@ -541,7 +587,14 @@ function showBubble(session: Session, fromBacklog = false): void {
   const isNew = editingId !== session.id
   editingId = session.id
   bubbleTitle.textContent = session.profileName
-  bubbleSwatch.style.background = session.profileColor
+  bubbleSwatch.style.setProperty('--c', session.profileColor)
+  if (isOutlineStyle(session)) {
+    bubbleSwatch.classList.add('is-outline')
+    bubbleSwatch.style.background = 'transparent'
+  } else {
+    bubbleSwatch.classList.remove('is-outline')
+    bubbleSwatch.style.background = session.profileColor
+  }
   const start = formatTimeLocal(session.startIso)
   const end = session.endIso ? formatTimeLocal(session.endIso) : '…'
   const ms = session.endIso
@@ -569,47 +622,205 @@ function renderSettingsList(): void {
   if (!draftProfiles) return
   settingsList.innerHTML = ''
   const ordered = [...draftProfiles].sort((a, b) => {
-    const av = a.slot === 0 ? 10 : a.slot
-    const bv = b.slot === 0 ? 10 : b.slot
+    const av = a.slot === 0 ? 99 : a.slot
+    const bv = b.slot === 0 ? 99 : b.slot
     return av - bv
   })
+  const colorGroup = ordered.map((p) => ({ color: p.color, id: String(p.slot) }))
 
   for (const profile of ordered) {
+    const stored = state?.profiles.find((p) => p.slot === profile.slot)
+    const storedName = stored?.name ?? profile.name
+    const storedColor = stored?.color ?? profile.color
+    const isRetiring = retiringSlot === profile.slot
+
     const row = document.createElement('div')
     row.className = 'settings-row'
+    if (isRetiring) row.classList.add('is-retiring')
 
     const slot = document.createElement('span')
     slot.className = 'slot-label'
     slot.textContent = SLOT_DISPLAY[profile.slot]
 
-    const color = document.createElement('input')
-    color.type = 'color'
-    color.value = normalizeHex(profile.color)
-    color.addEventListener('input', () => {
-      profile.color = color.value
-      const target = draftProfiles!.find((p) => p.slot === profile.slot)
-      if (target) target.color = color.value
-    })
+    const swatch = document.createElement('button')
+    swatch.type = 'button'
+    swatch.className = 'settings-swatch'
+    swatch.style.setProperty('--c', isRetiring ? storedColor : profile.color)
+    if (isOutlineStyle(isRetiring ? (stored ?? profile) : profile)) {
+      swatch.classList.add('is-outline')
+    } else {
+      swatch.style.backgroundColor = isRetiring ? storedColor : profile.color
+      setFillPattern(
+        swatch,
+        isRetiring ? 0 : fillPatternIndex(profile.color, colorGroup, String(profile.slot))
+      )
+    }
+    if (isRetiring) {
+      swatch.disabled = true
+    } else {
+      swatch.addEventListener('click', (e) => {
+        e.stopPropagation()
+        paletteOpenSlot = paletteOpenSlot === profile.slot ? null : profile.slot
+        renderSettingsList()
+      })
+    }
 
     const name = document.createElement('input')
     name.type = 'text'
-    name.value = profile.name
+    name.value = isRetiring ? storedName : profile.name
     name.maxLength = 40
     name.placeholder = defaultName(profile.slot)
-    name.addEventListener('input', () => {
-      profile.name = name.value
-      const target = draftProfiles!.find((p) => p.slot === profile.slot)
-      if (target) target.name = name.value
+    if (isRetiring) {
+      name.disabled = true
+    } else {
+      name.addEventListener('input', () => {
+        profile.name = name.value
+        const target = draftProfiles!.find((p) => p.slot === profile.slot)
+        if (target) target.name = name.value
+      })
+    }
+
+    const retireBtn = document.createElement('button')
+    retireBtn.type = 'button'
+    retireBtn.className = 'settings-retire'
+    retireBtn.textContent = '⟲'
+    retireBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      beginRetire(profile.slot)
     })
 
-    row.append(slot, color, name)
+    row.append(slot, swatch, name, retireBtn)
     settingsList.appendChild(row)
+
+    if (isRetiring && retireDraft) {
+      const caption = document.createElement('div')
+      caption.className = 'settings-retire-caption'
+      caption.textContent = `Retiring “${storedName}”`
+      settingsList.appendChild(caption)
+
+      const newNameRow = document.createElement('div')
+      newNameRow.className = 'settings-row'
+      const newName = document.createElement('input')
+      newName.type = 'text'
+      newName.value = retireDraft.name
+      newName.maxLength = 40
+      newName.placeholder = 'new profile name'
+      const startBtn = document.createElement('button')
+      startBtn.type = 'button'
+      startBtn.className = 'btn-primary'
+      startBtn.textContent = 'Start new profile'
+      const canStart = !!retireDraft.name.trim() && !!retireDraft.color
+      startBtn.disabled = !canStart
+      newName.addEventListener('input', () => {
+        if (!retireDraft) return
+        retireDraft.name = newName.value
+        startBtn.disabled = !retireDraft.name.trim() || !retireDraft.color
+      })
+      newNameRow.appendChild(newName)
+      settingsList.appendChild(newNameRow)
+
+      const wrap = document.createElement('div')
+      wrap.className = 'palette-wrap'
+      renderPaletteGrid(wrap, {
+        selected: retireDraft.color,
+        selectedOutline: retireDraft.outline,
+        onPick: (color, outline) => {
+          if (!retireDraft) return
+          retireDraft.color = color
+          retireDraft.outline = outline
+          renderSettingsList()
+        }
+      })
+      settingsList.appendChild(wrap)
+
+      const actions = document.createElement('div')
+      actions.className = 'settings-retire-actions'
+      const cancelBtn = document.createElement('button')
+      cancelBtn.type = 'button'
+      cancelBtn.className = 'settings-retire-cancel'
+      cancelBtn.textContent = 'Cancel'
+      cancelBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        cancelRetire()
+      })
+      startBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        void confirmRetire(profile.slot)
+      })
+      actions.append(cancelBtn, startBtn)
+      settingsList.appendChild(actions)
+
+      const running =
+        !!state?.activeSession &&
+        !state.activeSession.endIso &&
+        state.activeSession.profileSlot === profile.slot
+      if (running) {
+        const hint = document.createElement('div')
+        hint.className = 'settings-retire-hint'
+        hint.textContent = `Timer running · this segment stays on “${storedName}”`
+        settingsList.appendChild(hint)
+      }
+    } else if (paletteOpenSlot === profile.slot) {
+      const wrap = document.createElement('div')
+      wrap.className = 'palette-wrap'
+      renderPaletteGrid(wrap, {
+        selected: profile.color,
+        selectedOutline: isOutlineStyle(profile),
+        onPick: (color, outline) => {
+          profile.color = color
+          profile.outline = outline
+          const target = draftProfiles!.find((p) => p.slot === profile.slot)
+          if (target) {
+            target.color = color
+            target.outline = outline
+          }
+          paletteOpenSlot = null
+          renderSettingsList()
+        }
+      })
+      settingsList.appendChild(wrap)
+    }
   }
 }
 
-function normalizeHex(c: string): string {
-  if (/^#[0-9a-fA-F]{6}$/.test(c)) return c
-  return '#888888'
+function beginRetire(slot: ProfileSlot): void {
+  if (!draftProfiles) return
+  const stored = state?.profiles.find((p) => p.slot === slot)
+  const draft = draftProfiles.find((p) => p.slot === slot)
+  if (draft) {
+    draft.name = stored?.name ?? draft.name
+    draft.color = stored?.color ?? draft.color
+    draft.outline = stored?.outline ?? draft.outline
+  }
+  retiringSlot = slot
+  retireDraft = {
+    name: '',
+    color: stored?.color ?? draft?.color ?? '',
+    outline: stored?.outline ?? draft?.outline ?? false
+  }
+  paletteOpenSlot = null
+  renderSettingsList()
+}
+
+function cancelRetire(): void {
+  retiringSlot = null
+  retireDraft = null
+  renderSettingsList()
+}
+
+async function confirmRetire(slot: ProfileSlot): Promise<void> {
+  if (!retireDraft || !draftProfiles) return
+  const { name, color, outline } = retireDraft
+  if (!name.trim() || !color) return
+  await window.whatwhen.updateProfiles(
+    draftProfiles.map((p) => ({ ...p, name: p.name.trim() || defaultName(p.slot) }))
+  )
+  const snap = await window.whatwhen.retireProfile(slot, name, color, outline)
+  retiringSlot = null
+  retireDraft = null
+  paletteOpenSlot = null
+  draftProfiles = null
+  applyState(snap)
 }
 
 async function saveSettingsAndClose(): Promise<void> {
@@ -744,7 +955,10 @@ function sliceKey(slice: ProfileSlice): string {
 
 function analysisSignature(a: RangeAnalysis, view: DateRange): string {
   return `${view.startKey}..${view.endKey}|${a.slices
-    .map((s) => `${s.profileSlot}|${s.profileName}|${s.profileColor}|${s.notes.join('\u241F')}`)
+    .map(
+      (s) =>
+        `${s.profileSlot}|${s.profileName}|${s.profileColor}|${s.profileEpoch}|${s.notes.join('\u241F')}`
+    )
     .join('||')}`
 }
 
@@ -848,18 +1062,33 @@ function renderAnalysis(analysis: RangeAnalysis): void {
   pieWrap.appendChild(buildPieSvg(analysis))
   charts.appendChild(pieWrap)
 
+  const sliceGroup = analysis.slices.map((s) => ({
+    color: s.profileColor,
+    id: sliceKey(s)
+  }))
+
   const bars = document.createElement('div')
   bars.className = 'bar-list'
   for (const slice of analysis.slices) {
     const row = document.createElement('div')
     row.className = 'bar-row'
     row.dataset.sliceKey = sliceKey(slice)
+    const outline = isOutlineStyle(slice)
+    const pat = outline
+      ? 0
+      : fillPatternIndex(slice.profileColor, sliceGroup, sliceKey(slice))
 
     const label = document.createElement('div')
     label.className = 'bar-label'
     const sw = document.createElement('span')
     sw.className = 'bar-swatch'
-    sw.style.background = slice.profileColor
+    sw.style.setProperty('--c', slice.profileColor)
+    if (outline) {
+      sw.classList.add('is-outline')
+    } else {
+      sw.style.backgroundColor = slice.profileColor
+      setFillPattern(sw, pat)
+    }
     const name = document.createElement('span')
     name.textContent = slice.profileName
     label.append(sw, name)
@@ -869,7 +1098,13 @@ function renderAnalysis(analysis: RangeAnalysis): void {
     const fill = document.createElement('div')
     fill.className = 'bar-fill'
     fill.style.width = `${Math.max(2, slice.percentOfTracked)}%`
-    fill.style.background = slice.profileColor
+    fill.style.setProperty('--c', slice.profileColor)
+    if (outline) {
+      fill.classList.add('is-outline')
+    } else {
+      fill.style.backgroundColor = slice.profileColor
+      setFillPattern(fill, pat)
+    }
     track.appendChild(fill)
 
     const pct = document.createElement('div')
@@ -955,16 +1190,30 @@ function buildPieSvg(analysis: RangeAnalysis): SVGSVGElement {
 
   let angle = -Math.PI / 2
   const total = analysis.trackedMs || 1
+  const sliceGroup = analysis.slices.map((s) => ({
+    color: s.profileColor,
+    id: sliceKey(s)
+  }))
 
   for (const slice of analysis.slices) {
     const sweep = (slice.durationMs / total) * Math.PI * 2
     if (sweep <= 0) continue
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
     path.setAttribute('d', pieArcD(cx, cy, r, angle, sweep))
-    path.setAttribute('fill', slice.profileColor)
-    path.setAttribute('opacity', '0.88')
-    path.setAttribute('stroke', 'rgba(0,0,0,0.25)')
-    path.setAttribute('stroke-width', '1')
+    if (isOutlineStyle(slice)) {
+      path.setAttribute('fill', 'rgba(255, 255, 255, 0.06)')
+      path.setAttribute('stroke', slice.profileColor)
+      path.setAttribute('stroke-width', '2.75')
+      path.setAttribute('stroke-linejoin', 'round')
+      path.setAttribute('opacity', '1')
+    } else {
+      const pat = fillPatternIndex(slice.profileColor, sliceGroup, sliceKey(slice))
+      const fillId = `fp-${sliceKey(slice).replace(/[^a-zA-Z0-9_-]/g, '_')}`
+      path.setAttribute('fill', svgFillForPattern(svg, slice.profileColor, pat, fillId))
+      path.setAttribute('opacity', '0.88')
+      path.setAttribute('stroke', 'rgba(0,0,0,0.25)')
+      path.setAttribute('stroke-width', '1')
+    }
     path.dataset.sliceKey = sliceKey(slice)
     bindSliceHover(path, slice)
     svg.appendChild(path)
@@ -1035,6 +1284,11 @@ function renderTimeline(sessions: Session[]): void {
   rail.className = 'timeline-rail'
   timelineTrack.appendChild(rail)
 
+  const colorGroup = items.map(({ session }) => ({
+    color: session.profileColor,
+    id: session.id
+  }))
+
   items.forEach(({ session, durationMs }, i) => {
     const bubble = document.createElement('button')
     bubble.type = 'button'
@@ -1050,6 +1304,11 @@ function renderTimeline(sessions: Session[]): void {
 
     const bar = document.createElement('span')
     bar.className = 'timeline-bar'
+    if (isOutlineStyle(session)) {
+      bar.classList.add('is-outline')
+    } else {
+      setFillPattern(bar, fillPatternIndex(session.profileColor, colorGroup, session.id))
+    }
     bubble.append(bar)
 
     if (session.id === selectedTimelineId && splitAtIso) {

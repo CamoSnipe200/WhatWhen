@@ -16,7 +16,10 @@ import {
   formatDuration,
   isValidDateKey,
   localDateKey,
-  parseDateKey
+  normalizeProfileColor,
+  parseDateKey,
+  profileEpochOf,
+  SLOT_DISPLAY
 } from '../shared/types'
 import {
   deleteSession,
@@ -92,9 +95,33 @@ export class SessionService {
   }
 
   updateProfiles(profiles: Profile[]): void {
-    this.config.profiles = profiles
+    this.config.profiles = this.config.profiles.map((stored) => {
+      const incoming = profiles.find((p) => p.slot === stored.slot)
+      if (!incoming) return stored
+      return {
+        ...stored,
+        name: incoming.name?.trim() || stored.name,
+        color: normalizeProfileColor(incoming.color, stored.color),
+        outline: typeof incoming.outline === 'boolean' ? incoming.outline : stored.outline
+      }
+    })
     saveConfig(this.config)
     this.emit()
+  }
+
+  retireProfile(slot: ProfileSlot, name: string, color: string, outline?: boolean): UiSnapshot {
+    const current = this.getProfile(slot)
+    const next: Profile = {
+      slot,
+      epoch: current.epoch + 1,
+      name: name.trim() || `Profile ${SLOT_DISPLAY[slot]}`,
+      color: normalizeProfileColor(color, current.color),
+      outline: typeof outline === 'boolean' ? outline : current.outline
+    }
+    this.config.profiles = this.config.profiles.map((p) => (p.slot === slot ? next : p))
+    saveConfig(this.config)
+    this.emit()
+    return this.snapshot()
   }
 
   updateSettings(partial: Partial<AppConfig['settings']>): void {
@@ -249,7 +276,9 @@ export class SessionService {
       this.config.profiles.find((p) => p.slot === slot) ?? {
         slot,
         name: `Profile ${slot}`,
-        color: '#888888'
+        color: '#888888',
+        outline: false,
+        epoch: 0
       }
     )
   }
@@ -259,20 +288,26 @@ export class SessionService {
    * Closes the radial wheel after selection.
    */
   switchProfile(slot: ProfileSlot): UiSnapshot {
-    if (this.active?.profileSlot === slot && !this.active.endIso) {
+    const profile = this.getProfile(slot)
+    const sameStory =
+      this.active?.profileSlot === slot &&
+      !this.active.endIso &&
+      profileEpochOf(this.active) === profile.epoch
+    if (sameStory) {
       this.mode = 'idle'
       this.emit()
       return this.snapshot()
     }
 
     const closed = this.endActiveSession()
-    const profile = this.getProfile(slot)
     const now = new Date().toISOString()
     this.active = {
       id: randomUUID(),
       profileSlot: slot,
       profileName: profile.name,
       profileColor: profile.color,
+      profileOutline: profile.outline,
+      profileEpoch: profile.epoch,
       startIso: now,
       endIso: null,
       notes: '',
@@ -313,6 +348,8 @@ export class SessionService {
       profileSlot: slot,
       profileName: profile.name,
       profileColor: profile.color,
+      profileOutline: profile.outline,
+      profileEpoch: profile.epoch,
       startIso: now,
       endIso: null,
       notes: '',
@@ -687,7 +724,9 @@ export class SessionService {
     const patch = {
       profileSlot: slot,
       profileName: profile.name,
-      profileColor: profile.color
+      profileColor: profile.color,
+      profileOutline: profile.outline,
+      profileEpoch: profile.epoch
     }
 
     if (this.active?.id === id && !this.active.endIso) {
@@ -734,6 +773,8 @@ export class SessionService {
       profileSlot: current.profileSlot,
       profileName: current.profileName,
       profileColor: current.profileColor,
+      profileOutline: current.profileOutline,
+      profileEpoch: current.profileEpoch,
       startIso: new Date(at).toISOString(),
       endIso: isLive ? null : current.endIso,
       notes: '',
