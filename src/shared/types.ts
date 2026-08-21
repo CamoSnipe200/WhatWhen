@@ -25,6 +25,20 @@ export interface Session {
   notesStatus: NotesStatus
   /** Story generation on that slot. Absent on pre-Wave-4 logs → 0. */
   profileEpoch?: number
+  /** Second story on this segment. When set, wall time is split 50/50. */
+  shareSlot?: ProfileSlot
+  shareName?: string
+  shareColor?: string
+  shareOutline?: boolean
+  shareEpoch?: number
+}
+
+export interface SessionShare {
+  profileSlot: ProfileSlot
+  profileName: string
+  profileColor: string
+  profileOutline: boolean
+  profileEpoch: number
 }
 
 export interface DayLog {
@@ -369,6 +383,49 @@ export function profileSliceKey(s: {
   return `${s.profileSlot}:${profileEpochOf(s)}:${s.profileName}`
 }
 
+export function sessionShareOf(s: Session): SessionShare | null {
+  if (s.shareSlot == null || s.shareSlot === s.profileSlot) return null
+  return {
+    profileSlot: s.shareSlot,
+    profileName: s.shareName?.trim() || `Profile ${SLOT_DISPLAY[s.shareSlot]}`,
+    profileColor: normalizeProfileColor(s.shareColor),
+    profileOutline:
+      typeof s.shareOutline === 'boolean' ? s.shareOutline : isOutlineSlot(s.shareSlot),
+    profileEpoch: profileEpochOf({ profileEpoch: s.shareEpoch })
+  }
+}
+
+export function sessionTitleOf(s: Session): string {
+  const share = sessionShareOf(s)
+  return share ? `${s.profileName} / ${share.profileName}` : s.profileName
+}
+
+export function emptyShareFields(): Pick<
+  Session,
+  'shareSlot' | 'shareName' | 'shareColor' | 'shareOutline' | 'shareEpoch'
+> {
+  return {
+    shareSlot: undefined,
+    shareName: undefined,
+    shareColor: undefined,
+    shareOutline: undefined,
+    shareEpoch: undefined
+  }
+}
+
+export function shareFieldsFromProfile(profile: Profile): Pick<
+  Session,
+  'shareSlot' | 'shareName' | 'shareColor' | 'shareOutline' | 'shareEpoch'
+> {
+  return {
+    shareSlot: profile.slot,
+    shareName: profile.name,
+    shareColor: profile.color,
+    shareOutline: profile.outline,
+    shareEpoch: profile.epoch
+  }
+}
+
 /** Start of local calendar day for a date key or Date */
 export function dayStart(d = new Date()): Date {
   const out = new Date(d)
@@ -417,24 +474,51 @@ export function computeDayAnalysis(
     const dur = Math.max(0, sEnd - sStart)
     if (dur <= 0) continue
     trackedMs += dur
-    const key = profileSliceKey(s)
-    let acc = byKey.get(key)
-    if (!acc) {
-      acc = {
-        profileSlot: s.profileSlot,
-        profileName: s.profileName,
-        profileColor: s.profileColor,
-        profileOutline: isOutlineStyle(s),
-        profileEpoch: profileEpochOf(s),
-        durationMs: 0,
-        notes: []
-      }
-      byKey.set(key, acc)
-    }
-    acc.durationMs += dur
+    const share = sessionShareOf(s)
+    const parts = share
+      ? [
+          {
+            profileSlot: s.profileSlot,
+            profileName: s.profileName,
+            profileColor: s.profileColor,
+            profileOutline: isOutlineStyle(s),
+            profileEpoch: profileEpochOf(s)
+          },
+          share
+        ]
+      : [
+          {
+            profileSlot: s.profileSlot,
+            profileName: s.profileName,
+            profileColor: s.profileColor,
+            profileOutline: isOutlineStyle(s),
+            profileEpoch: profileEpochOf(s)
+          }
+        ]
+    const partDur = share ? dur / 2 : dur
     const note = s.notes.trim()
-    if (note) acc.notes.push(note)
-    else if (s.notesStatus === 'pending') acc.notes.push('(pending)')
+      ? s.notes.trim()
+      : s.notesStatus === 'pending'
+        ? '(pending)'
+        : ''
+    for (const part of parts) {
+      const key = profileSliceKey(part)
+      let acc = byKey.get(key)
+      if (!acc) {
+        acc = {
+          profileSlot: part.profileSlot,
+          profileName: part.profileName,
+          profileColor: part.profileColor,
+          profileOutline: part.profileOutline,
+          profileEpoch: part.profileEpoch,
+          durationMs: 0,
+          notes: []
+        }
+        byKey.set(key, acc)
+      }
+      acc.durationMs += partDur
+      if (note) acc.notes.push(note)
+    }
   }
 
   const untrackedMs = Math.max(0, dayMs - trackedMs)

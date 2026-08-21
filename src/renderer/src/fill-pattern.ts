@@ -1,17 +1,29 @@
-import { FILL_PATTERN_COUNT } from '../../shared/types'
+import { FILL_PATTERN_COUNT, type ProfileSlot } from '../../shared/types'
 
 const NS = 'http://www.w3.org/2000/svg'
 const MARK = 'rgba(255, 255, 255, 0.55)'
 
+export type FillGroupItem = {
+  color: string
+  id: string
+  slot: ProfileSlot | number | null
+}
+
+/**
+ * Marks only when the same slot reused a color after retire.
+ * A fill and an outline of the same hue on different slots stay unmarked.
+ */
 export function fillPatternIndex(
   color: string,
-  group: readonly { color: string; id: string }[],
+  slot: ProfileSlot | number | null | undefined,
+  group: readonly FillGroupItem[],
   id: string
 ): number {
   const c = color.toLowerCase()
   let n = 0
   for (const item of group) {
     if (item.color.toLowerCase() !== c) continue
+    if (item.slot !== slot) continue
     if (item.id === id) return n % FILL_PATTERN_COUNT
     n++
   }

@@ -5,6 +5,8 @@ const api = {
   getState: (): Promise<UiSnapshot> => ipcRenderer.invoke('get-state'),
   switchProfile: (slot: ProfileSlot): Promise<UiSnapshot> =>
     ipcRenderer.invoke('switch-profile', slot),
+  shiftPickProfile: (slot: ProfileSlot): Promise<UiSnapshot> =>
+    ipcRenderer.invoke('shift-pick-profile', slot),
   insertSegment: (): Promise<UiSnapshot> => ipcRenderer.invoke('insert-segment'),
   stop: (): Promise<UiSnapshot> => ipcRenderer.invoke('stop'),
   discardActive: (): Promise<UiSnapshot> => ipcRenderer.invoke('discard-active'),
@@ -40,6 +42,8 @@ const api = {
     ipcRenderer.invoke('update-session-times', id, startIso, endIso),
   reassignSession: (id: string, slot: ProfileSlot): Promise<UiSnapshot> =>
     ipcRenderer.invoke('reassign-session', id, slot),
+  shareSession: (id: string, slot: ProfileSlot | null): Promise<UiSnapshot> =>
+    ipcRenderer.invoke('share-session', id, slot),
   splitSession: (id: string, atIso: string): Promise<UiSnapshot> =>
     ipcRenderer.invoke('split-session', id, atIso),
   setTimelineEditing: (editing: boolean): Promise<void> =>

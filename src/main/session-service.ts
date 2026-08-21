@@ -18,7 +18,10 @@ import {
   localDateKey,
   normalizeProfileColor,
   parseDateKey,
+  emptyShareFields,
   profileEpochOf,
+  shareFieldsFromProfile,
+  sessionShareOf,
   SLOT_DISPLAY
 } from '../shared/types'
 import {
@@ -332,6 +335,85 @@ export class SessionService {
   }
 
   /**
+   * Shift-click on the wheel. First color starts and keeps the wheel open.
+   * The first secondary attaches in place (no notes). A later secondary ends
+   * the current segment, asks for notes, then starts the same primary with
+   * that new secondary.
+   */
+  shiftPickProfile(slot: ProfileSlot): UiSnapshot {
+    const picked = this.getProfile(slot)
+    const running = this.active && !this.active.endIso ? this.active : null
+
+    if (!running) {
+      this.active = {
+        id: randomUUID(),
+        profileSlot: slot,
+        profileName: picked.name,
+        profileColor: picked.color,
+        profileOutline: picked.outline,
+        profileEpoch: picked.epoch,
+        startIso: new Date().toISOString(),
+        endIso: null,
+        notes: '',
+        notesStatus: 'pending'
+      }
+      saveRuntime({ activeSession: this.active })
+      upsertSession(this.config.settings.logDir, this.active)
+      this.markLogsDirty()
+      this.mode = 'wheel'
+      this.bubbleSession = null
+      this.bubbleFromBacklog = false
+      this.emit()
+      return this.snapshot()
+    }
+
+    if (slot === running.profileSlot || slot === running.shareSlot) {
+      this.mode = 'wheel'
+      this.emit()
+      return this.snapshot()
+    }
+
+    if (!sessionShareOf(running)) {
+      this.active = { ...running, ...shareFieldsFromProfile(picked) }
+      saveRuntime({ activeSession: this.active })
+      upsertSession(this.config.settings.logDir, this.active)
+      this.markLogsDirty()
+      this.mode = 'wheel'
+      this.emit()
+      return this.snapshot()
+    }
+
+    const primary = this.getProfile(running.profileSlot)
+    const closed = this.endActiveSession()
+    this.active = {
+      id: randomUUID(),
+      profileSlot: primary.slot,
+      profileName: primary.name,
+      profileColor: primary.color,
+      profileOutline: primary.outline,
+      profileEpoch: primary.epoch,
+      startIso: new Date().toISOString(),
+      endIso: null,
+      notes: '',
+      notesStatus: 'pending',
+      ...shareFieldsFromProfile(picked)
+    }
+    saveRuntime({ activeSession: this.active })
+    upsertSession(this.config.settings.logDir, this.active)
+    this.markLogsDirty()
+
+    if (closed) {
+      this.bubbleSession = closed
+      this.bubbleFromBacklog = false
+      this.mode = 'bubble'
+    } else {
+      this.mode = 'wheel'
+    }
+    this.emit()
+    return this.snapshot()
+  }
+
+  /**
    * Insert a segment boundary on the current profile: end → note bubble → restart same slot.
    * Hotkey for adding a comment anytime while a timer runs.
    */
@@ -353,7 +435,16 @@ export class SessionService {
       startIso: now,
       endIso: null,
       notes: '',
-      notesStatus: 'pending'
+      notesStatus: 'pending',
+      ...(closed && sessionShareOf(closed)
+        ? {
+            shareSlot: closed.shareSlot,
+            shareName: closed.shareName,
+            shareColor: closed.shareColor,
+            shareOutline: closed.shareOutline,
+            shareEpoch: closed.shareEpoch
+          }
+        : {})
     }
     saveRuntime({ activeSession: this.active })
     upsertSession(this.config.settings.logDir, this.active)
@@ -363,7 +454,12 @@ export class SessionService {
       this.bubbleSession = closed
       this.bubbleFromBacklog = false
       this.mode = 'bubble'
+    } else {
+      this.mode = 'idle'
+      this.bubbleSession = null
+      this.bubbleFromBacklog = false
     }
+
     this.emit()
     return this.snapshot()
   }
@@ -720,27 +816,52 @@ export class SessionService {
   }
 
   reassignSession(id: string, slot: ProfileSlot): UiSnapshot {
+    const current =
+      this.active?.id === id && !this.active.endIso
+        ? this.active
+        : this.sessionsForDay(this.timelineKey).find((s) => s.id === id)
+    if (!current) return this.snapshot()
+
     const profile = this.getProfile(slot)
     const patch = {
       profileSlot: slot,
       profileName: profile.name,
       profileColor: profile.color,
       profileOutline: profile.outline,
-      profileEpoch: profile.epoch
+      profileEpoch: profile.epoch,
+      ...(current.shareSlot === slot ? emptyShareFields() : {})
     }
+    const updated = { ...current, ...patch }
 
     if (this.active?.id === id && !this.active.endIso) {
-      this.active = { ...this.active, ...patch }
+      this.active = updated
       saveRuntime({ activeSession: this.active })
-      upsertSession(this.config.settings.logDir, this.active)
-      this.markLogsDirty()
-      this.emit()
-      return this.snapshot()
     }
+    upsertSession(this.config.settings.logDir, updated)
+    this.markLogsDirty()
+    this.emit()
+    return this.snapshot()
+  }
 
-    const session = this.sessionsForDay(this.timelineKey).find((s) => s.id === id)
-    if (!session) return this.snapshot()
-    upsertSession(this.config.settings.logDir, { ...session, ...patch })
+  shareSession(id: string, slot: ProfileSlot | null): UiSnapshot {
+    const current =
+      this.active?.id === id && !this.active.endIso
+        ? this.active
+        : this.sessionsForDay(this.timelineKey).find((s) => s.id === id)
+    if (!current) return this.snapshot()
+
+    const clear =
+      slot == null || slot === current.profileSlot || slot === current.shareSlot
+    const patch = clear
+      ? emptyShareFields()
+      : shareFieldsFromProfile(this.getProfile(slot))
+    const updated = { ...current, ...patch }
+
+    if (this.active?.id === id && !this.active.endIso) {
+      this.active = updated
+      saveRuntime({ activeSession: this.active })
+    }
+    upsertSession(this.config.settings.logDir, updated)
     this.markLogsDirty()
     this.emit()
     return this.snapshot()
@@ -775,6 +896,11 @@ export class SessionService {
       profileColor: current.profileColor,
       profileOutline: current.profileOutline,
       profileEpoch: current.profileEpoch,
+      shareSlot: current.shareSlot,
+      shareName: current.shareName,
+      shareColor: current.shareColor,
+      shareOutline: current.shareOutline,
+      shareEpoch: current.shareEpoch,
       startIso: new Date(at).toISOString(),
       endIso: isLive ? null : current.endIso,
       notes: '',

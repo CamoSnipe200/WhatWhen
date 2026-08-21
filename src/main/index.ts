@@ -588,6 +588,13 @@ function setupIpc(): void {
     return service.snapshot()
   })
 
+  ipcMain.handle('shift-pick-profile', (_e, slot: ProfileSlot) => {
+    if (!PROFILE_SLOTS.includes(slot)) return service.snapshot()
+    service.shiftPickProfile(slot)
+    pushState()
+    return service.snapshot()
+  })
+
   ipcMain.handle('insert-segment', () => {
     service.insertSegment()
     pushState()
@@ -711,6 +718,13 @@ function setupIpc(): void {
 
   ipcMain.handle('reassign-session', (_e, id: string, slot: ProfileSlot) => {
     service.reassignSession(id, slot)
+    pushState()
+    return service.snapshot()
+  })
+
+  ipcMain.handle('share-session', (_e, id: string, slot: ProfileSlot | null) => {
+    if (slot != null && !PROFILE_SLOTS.includes(slot)) return service.snapshot()
+    service.shareSession(id, slot)
     pushState()
     return service.snapshot()
   })
@@ -878,8 +892,11 @@ function setupIpc(): void {
           { label: 'Hold × for ~0.7 s to stop and discard the segment', enabled: false },
           { label: 'Badge = pending notes · click it to review', enabled: false },
           { label: 'In a note: Enter saves · Esc keeps it pending', enabled: false },
-          { label: 'Analysis: hover a slice or bar for its notes', enabled: false },
-          { label: 'Timeline: click a bar to edit times, reassign, or split', enabled: false },
+          { label: 'Analysis: hover a slice or bar for its notes · click to keep them open', enabled: false },
+          { label: 'Shift-click a color to start and keep the wheel open', enabled: false },
+          { label: 'Shift-click a second color to split the running segment 50/50', enabled: false },
+          { label: 'Shift-click a third color to end that split, note it, and start a new 50/50', enabled: false },
+          { label: 'Timeline: click a bar to edit times, reassign, half-with, or split', enabled: false },
           {
             label:
               'Hotkeys: Ctrl+Shift+Alt+1–9 switch · ` stops · N adds a comment · 0 recovers the orb',

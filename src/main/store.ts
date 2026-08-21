@@ -11,6 +11,9 @@ import {
   formatTimeLocal,
   isValidDateKey,
   localDateKey,
+  sessionShareOf,
+  sessionTitleOf,
+  DEFAULT_COLORS,
   SUPERSEDED_PASTEL_COLORS
 } from '../shared/types'
 import {
@@ -71,6 +74,23 @@ export function loadConfig(): AppConfig {
 }
 
 const SUPERSEDED = new Set(SUPERSEDED_PASTEL_COLORS.map((c) => c.toLowerCase()))
+
+function migrateSessionPaint(s: Session): Session {
+  let next = s
+  if (s.profileSlot >= 8 && s.profileSlot <= 12) {
+    const saved = (s.profileColor || '').toLowerCase()
+    if (SUPERSEDED.has(saved)) {
+      next = { ...next, profileColor: DEFAULT_COLORS[s.profileSlot - 1] }
+    }
+  }
+  if (s.shareSlot != null && s.shareSlot >= 8 && s.shareSlot <= 12) {
+    const saved = (s.shareColor || '').toLowerCase()
+    if (SUPERSEDED.has(saved)) {
+      next = { ...next, shareColor: DEFAULT_COLORS[s.shareSlot - 1] }
+    }
+  }
+  return next
+}
 
 function mergeProfiles(saved?: Profile[]): Profile[] {
   const defaults = defaultProfiles()
@@ -136,6 +156,10 @@ export function loadDayLog(logDir: string, dateKey = localDateKey()): DayLog {
   try {
     const log = JSON.parse(readFileSync(path, 'utf-8')) as DayLog
     if (!log.sessions) log.sessions = []
+    const sessions = log.sessions.map(migrateSessionPaint)
+    const dirty = sessions.some((s, i) => s !== log.sessions[i])
+    log.sessions = sessions
+    if (dirty) saveDayLog(logDir, log)
     return log
   } catch {
     return { date: dateKey, sessions: [] }
@@ -201,8 +225,14 @@ function renderMarkdown(log: DayLog): string {
           ? new Date(s.endIso).getTime() - new Date(s.startIso).getTime()
           : Date.now() - new Date(s.startIso).getTime()
       const dur = formatDuration(ms)
-      lines.push(`### ${s.profileName} · ${start} – ${end} (${dur})`)
-      lines.push(`- Profile: ${s.profileName}`)
+      const title = sessionTitleOf(s)
+      const share = sessionShareOf(s)
+      lines.push(`### ${title} · ${start} – ${end} (${dur})`)
+      lines.push(
+        share
+          ? `- Profiles: ${s.profileName} · ${share.profileName} (half each)`
+          : `- Profile: ${s.profileName}`
+      )
       if (!s.endIso) {
         lines.push(`- Notes: *(in progress)*`)
       } else if (s.notes.trim()) {

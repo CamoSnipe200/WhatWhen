@@ -60,6 +60,11 @@ You can also run the workflow manually under **Actions → Release** (downloads 
 | Esc (on stack) | Collapse to orb only |
 | Right-click orb | Open today’s log, folder, quit |
 | Date chip (Analysis / Timeline) | Pick a past day or a date range |
+| Analysis: click a slice or bar | Keep that story’s notes open (scroll them) |
+| Shift-click a wheel color | Start that story and keep the wheel open |
+| Shift-click a second wheel color | Split the running segment 50/50 (no notes) |
+| Shift-click a third wheel color | End that split, ask for notes, then run 50/50 with the new color |
+| Timeline **Half with** | Attach or clear a second story on a bar |
 
 ## Calendar
 
@@ -79,10 +84,11 @@ A slot is a hotkey position, not a permanent story.
 - Edit the name and color of a slot in **Edit profiles…**.
 - Click the color swatch to open a palette. Each color has a filled swatch and an outline swatch. There is no OS color dialog.
 - Slots 8–12 start as outlines of colors 1–5. Any slot can use a fill or an outline.
-- Click **⟲** to start a new profile on that slot. You may reuse the same color. Shared colors on slots 1–7 get dots or hatching (up to 5 marks, then they repeat).
+- Click **⟲** to start a new profile on that slot. You may reuse the same color. Dots or hatching appear only when a retired story and a later story on the **same slot** share a color in Analysis or Timeline.
 - **Past sessions keep the name and color they were recorded under.** Analysis over a range that crosses a retirement shows both profiles as separate slices.
 - Reassign a past session in the Timeline and it moves to the story that occupies that slot *now*.
 - A running timer stays on the old story until you switch.
+- A segment can share time with a second story. The bar and orb show half of each color. Analysis counts half the duration for each story.
 
 ## Data
 

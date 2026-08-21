@@ -18,7 +18,9 @@ import {
   isOutlineStyle,
   localDateKey,
   parseDateKey,
-  profileSliceKey
+  profileSliceKey,
+  sessionShareOf,
+  sessionTitleOf
 } from '../../shared/types'
 import {
   emptyStateCopy,
@@ -79,6 +81,7 @@ let wheelBuilt = false
 let selectedTimelineId: string | null = null
 let splitAtIso: string | null = null
 let hoveredSliceKey: string | null = null
+let selectedSliceKey: string | null = null
 let analysisSig = ''
 let analysisRebuildPending = false
 let notesHideTimer: number | null = null
@@ -193,12 +196,12 @@ function applyState(snap: UiSnapshot): void {
     }
     const sig = analysisSignature(snap.viewAnalysis, snap.view)
     if (sig !== analysisSig) {
-      if (hoveredSliceKey !== null) {
+      if (hoveredSliceKey !== null || selectedSliceKey !== null) {
         analysisRebuildPending = true
       } else {
         renderAnalysis(snap.viewAnalysis)
       }
-    } else if (hoveredSliceKey === null && snap.viewIncludesToday) {
+    } else if (hoveredSliceKey === null && selectedSliceKey === null && snap.viewIncludesToday) {
       updateAnalysisLive(snap.viewAnalysis)
     }
     return
@@ -278,6 +281,7 @@ function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
       notesHideTimer = null
     }
     hoveredSliceKey = null
+    selectedSliceKey = null
     analysisSig = ''
     analysisRebuildPending = false
     analysisEl.hidden = true
@@ -328,16 +332,25 @@ function renderOrb(snap: UiSnapshot): void {
 
   if (snap.activeSession && !snap.activeSession.endIso) {
     orb.classList.add('active')
+    const share = sessionShareOf(snap.activeSession)
     orb.style.setProperty('--c', snap.activeSession.profileColor)
-    if (isOutlineStyle(snap.activeSession)) {
-      orb.classList.add('is-outline')
-      orbTint.style.background = 'transparent'
-    } else {
+    if (share) {
+      orb.classList.add('is-split')
       orb.classList.remove('is-outline')
-      orbTint.style.background = snap.activeSession.profileColor
+      orb.style.setProperty('--c2', share.profileColor)
+      orbTint.style.background = `linear-gradient(90deg, ${snap.activeSession.profileColor} 0 50%, ${share.profileColor} 50% 100%)`
+    } else {
+      orb.classList.remove('is-split')
+      if (isOutlineStyle(snap.activeSession)) {
+        orb.classList.add('is-outline')
+        orbTint.style.background = 'transparent'
+      } else {
+        orb.classList.remove('is-outline')
+        orbTint.style.background = snap.activeSession.profileColor
+      }
     }
   } else {
-    orb.classList.remove('active', 'is-outline')
+    orb.classList.remove('active', 'is-outline', 'is-split')
     orbTint.style.background = 'transparent'
   }
 
@@ -446,7 +459,11 @@ function renderWheel(snap: UiSnapshot): void {
 
   const colorGroup = items
     .filter((item): item is Extract<Placed, { kind: 'profile' }> => item.kind === 'profile')
-    .map((item) => ({ color: item.profile.color, id: String(item.profile.slot) }))
+    .map((item) => ({
+      color: item.profile.color,
+      id: String(item.profile.slot),
+      slot: item.profile.slot
+    }))
 
   const activeSlot = snap.activeSession?.endIso
     ? undefined
@@ -507,6 +524,10 @@ function renderWheel(snap: UiSnapshot): void {
       const { profile } = item
       btn.dataset.slot = String(profile.slot)
       if (profile.slot === activeSlot) btn.classList.add('active-slot')
+      const live = snap.activeSession && !snap.activeSession.endIso ? snap.activeSession : null
+      if (live && sessionShareOf(live)?.profileSlot === profile.slot) {
+        btn.classList.add('share-slot')
+      }
       btn.style.setProperty('--c', profile.color)
       if (isOutlineStyle(profile)) {
         btn.classList.add('is-outline')
@@ -514,12 +535,16 @@ function renderWheel(snap: UiSnapshot): void {
         if (isLightProfileColor(profile.color)) btn.classList.add('is-light')
         setFillPattern(
           btn,
-          fillPatternIndex(profile.color, colorGroup, String(profile.slot))
+          fillPatternIndex(profile.color, profile.slot, colorGroup, String(profile.slot))
         )
       }
       num.textContent = SLOT_DISPLAY[profile.slot]
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
+        if (e.shiftKey) {
+          void window.whatwhen.shiftPickProfile(profile.slot as ProfileSlot)
+          return
+        }
         void window.whatwhen.switchProfile(profile.slot as ProfileSlot)
       })
     }
@@ -572,8 +597,15 @@ function renderStack(pending: Session[], opts?: { allowEmpty?: boolean }): void 
     const dot = document.createElement('button')
     dot.type = 'button'
     dot.className = 'stack-dot'
-    if (isOutlineStyle(session)) dot.classList.add('is-outline')
-    dot.style.setProperty('--dot-color', session.profileColor)
+    const share = sessionShareOf(session)
+    if (share) {
+      dot.classList.add('is-split')
+      dot.style.setProperty('--dot-color', session.profileColor)
+      dot.style.setProperty('--c2', share.profileColor)
+    } else {
+      if (isOutlineStyle(session)) dot.classList.add('is-outline')
+      dot.style.setProperty('--dot-color', session.profileColor)
+    }
     dot.addEventListener('click', (e) => {
       e.stopPropagation()
       void window.whatwhen.openBubble(session.id)
@@ -586,13 +618,18 @@ function showBubble(session: Session, fromBacklog = false): void {
   bubbleEl.hidden = false
   const isNew = editingId !== session.id
   editingId = session.id
-  bubbleTitle.textContent = session.profileName
+  bubbleTitle.textContent = sessionTitleOf(session)
+  const share = sessionShareOf(session)
   bubbleSwatch.style.setProperty('--c', session.profileColor)
-  if (isOutlineStyle(session)) {
+  bubbleSwatch.classList.remove('is-outline', 'is-split')
+  if (share) {
+    bubbleSwatch.classList.add('is-split')
+    bubbleSwatch.style.setProperty('--c2', share.profileColor)
+    bubbleSwatch.style.background = `linear-gradient(90deg, ${session.profileColor} 0 50%, ${share.profileColor} 50% 100%)`
+  } else if (isOutlineStyle(session)) {
     bubbleSwatch.classList.add('is-outline')
     bubbleSwatch.style.background = 'transparent'
   } else {
-    bubbleSwatch.classList.remove('is-outline')
     bubbleSwatch.style.background = session.profileColor
   }
   const start = formatTimeLocal(session.startIso)
@@ -626,7 +663,11 @@ function renderSettingsList(): void {
     const bv = b.slot === 0 ? 99 : b.slot
     return av - bv
   })
-  const colorGroup = ordered.map((p) => ({ color: p.color, id: String(p.slot) }))
+  const colorGroup = ordered.map((p) => ({
+    color: p.color,
+    id: String(p.slot),
+    slot: p.slot
+  }))
 
   for (const profile of ordered) {
     const stored = state?.profiles.find((p) => p.slot === profile.slot)
@@ -652,7 +693,7 @@ function renderSettingsList(): void {
       swatch.style.backgroundColor = isRetiring ? storedColor : profile.color
       setFillPattern(
         swatch,
-        isRetiring ? 0 : fillPatternIndex(profile.color, colorGroup, String(profile.slot))
+        isRetiring ? 0 : fillPatternIndex(profile.color, profile.slot, colorGroup, String(profile.slot))
       )
     }
     if (isRetiring) {
@@ -957,7 +998,7 @@ function analysisSignature(a: RangeAnalysis, view: DateRange): string {
   return `${view.startKey}..${view.endKey}|${a.slices
     .map(
       (s) =>
-        `${s.profileSlot}|${s.profileName}|${s.profileColor}|${s.profileEpoch}|${s.notes.join('\u241F')}`
+        `${s.profileSlot}|${s.profileName}|${s.profileColor}|${s.profileOutline}|${s.profileEpoch}|${s.notes.join('\u241F')}`
     )
     .join('||')}`
 }
@@ -970,6 +1011,21 @@ function pieArcD(cx: number, cy: number, r: number, startAngle: number, sweep: n
   const y2 = cy + r * Math.sin(end)
   const large = sweep > Math.PI ? 1 : 0
   return `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`
+}
+
+function sliceByKey(key: string | null): ProfileSlice | undefined {
+  if (!key) return undefined
+  return state?.viewAnalysis.slices.find((s) => sliceKey(s) === key)
+}
+
+function paintSliceSelection(): void {
+  const key = selectedSliceKey
+  analysisBody.querySelectorAll<HTMLElement>('.bar-row').forEach((row) => {
+    row.classList.toggle('is-selected', row.dataset.sliceKey === key)
+  })
+  analysisBody.querySelectorAll<SVGPathElement>('.pie-chart path').forEach((path) => {
+    path.classList.toggle('is-selected', path.dataset.sliceKey === key)
+  })
 }
 
 function showSliceNotes(slice: ProfileSlice): void {
@@ -995,6 +1051,16 @@ function showSliceNotes(slice: ProfileSlice): void {
 }
 
 function hideSliceNotes(): void {
+  const pinned = sliceByKey(selectedSliceKey)
+  if (pinned) {
+    if (notesHideTimer !== null) {
+      window.clearTimeout(notesHideTimer)
+      notesHideTimer = null
+    }
+    hoveredSliceKey = null
+    showSliceNotes(pinned)
+    return
+  }
   if (notesHideTimer !== null) {
     window.clearTimeout(notesHideTimer)
   }
@@ -1020,7 +1086,21 @@ function bindSliceHover(el: Element, slice: ProfileSlice): void {
     showSliceNotes(slice)
   })
   el.addEventListener('mouseleave', () => {
-    if (hoveredSliceKey === sliceKey(slice)) hideSliceNotes()
+    if (hoveredSliceKey === sliceKey(slice)) {
+      hoveredSliceKey = null
+      hideSliceNotes()
+    }
+  })
+  el.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const key = sliceKey(slice)
+    selectedSliceKey = selectedSliceKey === key ? null : key
+    paintSliceSelection()
+    if (selectedSliceKey || hoveredSliceKey === key) {
+      showSliceNotes(slice)
+    } else {
+      hideSliceNotes()
+    }
   })
 }
 
@@ -1064,7 +1144,8 @@ function renderAnalysis(analysis: RangeAnalysis): void {
 
   const sliceGroup = analysis.slices.map((s) => ({
     color: s.profileColor,
-    id: sliceKey(s)
+    id: sliceKey(s),
+    slot: s.profileSlot
   }))
 
   const bars = document.createElement('div')
@@ -1076,7 +1157,7 @@ function renderAnalysis(analysis: RangeAnalysis): void {
     const outline = isOutlineStyle(slice)
     const pat = outline
       ? 0
-      : fillPatternIndex(slice.profileColor, sliceGroup, sliceKey(slice))
+      : fillPatternIndex(slice.profileColor, slice.profileSlot, sliceGroup, sliceKey(slice))
 
     const label = document.createElement('div')
     label.className = 'bar-label'
@@ -1085,6 +1166,7 @@ function renderAnalysis(analysis: RangeAnalysis): void {
     sw.style.setProperty('--c', slice.profileColor)
     if (outline) {
       sw.classList.add('is-outline')
+      sw.style.borderColor = slice.profileColor
     } else {
       sw.style.backgroundColor = slice.profileColor
       setFillPattern(sw, pat)
@@ -1101,6 +1183,7 @@ function renderAnalysis(analysis: RangeAnalysis): void {
     fill.style.setProperty('--c', slice.profileColor)
     if (outline) {
       fill.classList.add('is-outline')
+      fill.style.borderColor = slice.profileColor
     } else {
       fill.style.backgroundColor = slice.profileColor
       setFillPattern(fill, pat)
@@ -1118,12 +1201,18 @@ function renderAnalysis(analysis: RangeAnalysis): void {
   charts.appendChild(bars)
   analysisBody.appendChild(charts)
 
-  const stillHovered = analysis.slices.find((s) => sliceKey(s) === hoveredSliceKey)
-  if (stillHovered) {
-    showSliceNotes(stillHovered)
+  if (selectedSliceKey && !analysis.slices.some((s) => sliceKey(s) === selectedSliceKey)) {
+    selectedSliceKey = null
+  }
+  const stillShown =
+    analysis.slices.find((s) => sliceKey(s) === hoveredSliceKey) ??
+    analysis.slices.find((s) => sliceKey(s) === selectedSliceKey)
+  if (stillShown) {
+    showSliceNotes(stillShown)
   } else {
     hideSliceNotes()
   }
+  paintSliceSelection()
   analysisSig = analysisSignature(analysis, view)
   analysisRebuildPending = false
 }
@@ -1192,7 +1281,8 @@ function buildPieSvg(analysis: RangeAnalysis): SVGSVGElement {
   const total = analysis.trackedMs || 1
   const sliceGroup = analysis.slices.map((s) => ({
     color: s.profileColor,
-    id: sliceKey(s)
+    id: sliceKey(s),
+    slot: s.profileSlot
   }))
 
   for (const slice of analysis.slices) {
@@ -1201,13 +1291,18 @@ function buildPieSvg(analysis: RangeAnalysis): SVGSVGElement {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
     path.setAttribute('d', pieArcD(cx, cy, r, angle, sweep))
     if (isOutlineStyle(slice)) {
-      path.setAttribute('fill', 'rgba(255, 255, 255, 0.06)')
+      path.setAttribute('fill', 'none')
       path.setAttribute('stroke', slice.profileColor)
-      path.setAttribute('stroke-width', '2.75')
+      path.setAttribute('stroke-width', '3')
       path.setAttribute('stroke-linejoin', 'round')
       path.setAttribute('opacity', '1')
     } else {
-      const pat = fillPatternIndex(slice.profileColor, sliceGroup, sliceKey(slice))
+      const pat = fillPatternIndex(
+        slice.profileColor,
+        slice.profileSlot,
+        sliceGroup,
+        sliceKey(slice)
+      )
       const fillId = `fp-${sliceKey(slice).replace(/[^a-zA-Z0-9_-]/g, '_')}`
       path.setAttribute('fill', svgFillForPattern(svg, slice.profileColor, pat, fillId))
       path.setAttribute('opacity', '0.88')
@@ -1284,10 +1379,14 @@ function renderTimeline(sessions: Session[]): void {
   rail.className = 'timeline-rail'
   timelineTrack.appendChild(rail)
 
-  const colorGroup = items.map(({ session }) => ({
-    color: session.profileColor,
-    id: session.id
-  }))
+  const colorGroup: { color: string; id: string; slot: typeof items[number]['session']['profileSlot'] }[] = []
+  const seenStories = new Set<string>()
+  for (const { session } of items) {
+    const id = profileSliceKey(session)
+    if (seenStories.has(id)) continue
+    seenStories.add(id)
+    colorGroup.push({ color: session.profileColor, id, slot: session.profileSlot })
+  }
 
   items.forEach(({ session, durationMs }, i) => {
     const bubble = document.createElement('button')
@@ -1304,10 +1403,22 @@ function renderTimeline(sessions: Session[]): void {
 
     const bar = document.createElement('span')
     bar.className = 'timeline-bar'
-    if (isOutlineStyle(session)) {
+    const share = sessionShareOf(session)
+    if (share) {
+      bar.classList.add('is-split')
+      bubble.style.setProperty('--c2', share.profileColor)
+    } else if (isOutlineStyle(session)) {
       bar.classList.add('is-outline')
     } else {
-      setFillPattern(bar, fillPatternIndex(session.profileColor, colorGroup, session.id))
+      setFillPattern(
+        bar,
+        fillPatternIndex(
+          session.profileColor,
+          session.profileSlot,
+          colorGroup,
+          profileSliceKey(session)
+        )
+      )
     }
     bubble.append(bar)
 
@@ -1337,7 +1448,7 @@ function renderTimeline(sessions: Session[]): void {
       timelineHover.innerHTML = ''
       const h = document.createElement('div')
       h.className = 'timeline-hover-title'
-      h.textContent = `${session.profileName} · ${formatTimeLocal(session.startIso)} – ${endLabel}`
+      h.textContent = `${sessionTitleOf(session)} · ${formatTimeLocal(session.startIso)} – ${endLabel}`
       const body = document.createElement('div')
       body.className = 'timeline-hover-note'
       body.textContent = note
@@ -1424,6 +1535,7 @@ function renderTimelineInspector(session: Session): void {
     chip.type = 'button'
     chip.className = 'timeline-chip'
     chip.style.setProperty('--c', profile.color)
+    if (isOutlineStyle(profile)) chip.classList.add('is-outline')
     chip.textContent = SLOT_DISPLAY[profile.slot]
     if (profile.slot === session.profileSlot) chip.classList.add('active')
     chip.addEventListener('click', (e) => {
@@ -1432,6 +1544,30 @@ function renderTimelineInspector(session: Session): void {
       void window.whatwhen.reassignSession(session.id, profile.slot)
     })
     chips.appendChild(chip)
+  }
+
+  const shareRow = document.createElement('div')
+  shareRow.className = 'timeline-inspector-chips is-share'
+  const shareLabel = document.createElement('span')
+  shareLabel.className = 'timeline-inspector-label'
+  shareLabel.textContent = 'Half with'
+  shareRow.appendChild(shareLabel)
+  const shared = sessionShareOf(session)
+  for (const profile of [...profiles].sort((a, b) => a.slot - b.slot)) {
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = 'timeline-chip'
+    chip.style.setProperty('--c', profile.color)
+    if (isOutlineStyle(profile)) chip.classList.add('is-outline')
+    chip.textContent = SLOT_DISPLAY[profile.slot]
+    if (shared?.profileSlot === profile.slot) chip.classList.add('is-share')
+    if (profile.slot === session.profileSlot) chip.classList.add('is-primary')
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation()
+      closeTimePop()
+      void window.whatwhen.shareSession(session.id, profile.slot)
+    })
+    shareRow.appendChild(chip)
   }
 
   const splitRow = document.createElement('div')
@@ -1461,7 +1597,7 @@ function renderTimelineInspector(session: Session): void {
   })
   splitRow.append(splitWrap, splitBtn)
 
-  timelineInspector.append(times, chips, splitRow)
+  timelineInspector.append(times, chips, shareRow, splitRow)
 }
 
 /**
@@ -1535,6 +1671,35 @@ settingsDone.addEventListener('click', () => {
 
 analysisClose.addEventListener('click', () => {
   void window.whatwhen.closeUi()
+})
+
+analysisNotes.addEventListener('mouseenter', () => {
+  if (notesHideTimer !== null) {
+    window.clearTimeout(notesHideTimer)
+    notesHideTimer = null
+  }
+})
+
+analysisNotes.addEventListener('mouseleave', () => {
+  if (!hoveredSliceKey) hideSliceNotes()
+})
+
+analysisEl.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement
+  if (
+    t.closest('.bar-row') ||
+    t.closest('.pie-chart') ||
+    t.closest('.analysis-notes') ||
+    t.closest('.overlay-close') ||
+    t.closest('.overlay-nav') ||
+    t.closest('.calendar-pop')
+  ) {
+    return
+  }
+  if (!selectedSliceKey) return
+  selectedSliceKey = null
+  paintSliceSelection()
+  hideSliceNotes()
 })
 
 analysisDateChip.addEventListener('click', (e) => {
