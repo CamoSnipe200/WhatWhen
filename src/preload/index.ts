@@ -7,6 +7,7 @@ const api = {
     ipcRenderer.invoke('switch-profile', slot),
   insertSegment: (): Promise<UiSnapshot> => ipcRenderer.invoke('insert-segment'),
   stop: (): Promise<UiSnapshot> => ipcRenderer.invoke('stop'),
+  discardActive: (): Promise<UiSnapshot> => ipcRenderer.invoke('discard-active'),
   toggleWheel: (): Promise<UiSnapshot> => ipcRenderer.invoke('toggle-wheel'),
   toggleStack: (): Promise<UiSnapshot> => ipcRenderer.invoke('toggle-stack'),
   openStack: (): Promise<UiSnapshot> => ipcRenderer.invoke('open-stack'),

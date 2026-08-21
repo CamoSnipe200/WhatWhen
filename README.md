@@ -6,9 +6,9 @@ A tiny always-on-top **workday profile timer** for Windows. Switch profiles with
 
 - **Frosted glass orb** in the bottom-right of the primary display
 - **6 profiles** with a chromatic rainbow palette (aeroglass radial picker)
-- **Global hotkeys**: `Ctrl+Shift+Alt+1`–`6` to switch; `Ctrl+Shift+Alt+\`` to stop
+- **Global hotkeys**: `Ctrl+Shift+Alt+1`–`7` to switch; `Ctrl+Shift+Alt+\`` to stop
 - On switch/stop: **chat bubble** above the orb for brief notes (Enter save, Esc skip back)
-- **Session stack**: click the orb to see pending note circles (oldest top → newest bottom); click one to edit
+- **Session stack**: click the pending badge to see pending note circles (oldest top → newest bottom); click one to edit
 - **Daily Markdown** logs in `Documents\WhatWhen\YYYY-MM-DD.md`
 
 ## Develop
@@ -43,14 +43,17 @@ You can also run the workflow manually under **Actions → Release** (downloads 
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+Shift+Alt+1` … `6` | Switch to profile 1–6 |
+| `Ctrl+Shift+Alt+1` … `7` | Switch to profile 1–7 |
 | `Ctrl+Shift+Alt+\`` | Stop timer (idle) |
 
 ## UI
 
 | Gesture | Result |
 |---------|--------|
-| Left-click orb | Toggle pending session stack |
+| Left-click orb | Open / close the profile wheel |
+| Click the pending badge | Open the pending notes stack |
+| Click × | Stop and keep the segment (asks for notes) |
+| Hold × for ~0.7 s | Stop and discard the segment |
 | Click a stack circle | Open chat bubble for that session |
 | Enter (in bubble) | Save notes → back to stack |
 | Esc (in bubble) | Back to stack without saving |

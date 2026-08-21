@@ -127,6 +127,14 @@ export function upsertSession(logDir: string, session: Session): DayLog {
   return log
 }
 
+export function deleteSession(logDir: string, id: string, dateKey = localDateKey()): boolean {
+  const log = loadDayLog(logDir, dateKey)
+  const next = log.sessions.filter((s) => s.id !== id)
+  if (next.length === log.sessions.length) return false
+  saveDayLog(logDir, { ...log, sessions: next })
+  return true
+}
+
 export function listPending(logDir: string, dateKey = localDateKey()): Session[] {
   const log = loadDayLog(logDir, dateKey)
   return log.sessions

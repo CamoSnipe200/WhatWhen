@@ -12,6 +12,7 @@ import {
   localDateKey
 } from '../shared/types'
 import {
+  deleteSession,
   listPending,
   loadConfig,
   loadDayLog,
@@ -225,6 +226,26 @@ export class SessionService {
       this.bubbleSession = null
       this.bubbleFromBacklog = false
     }
+    this.emit()
+    return this.snapshot()
+  }
+
+  /**
+   * Drop the in-progress session and delete its log record.
+   * Does not end the session, write notes, or prompt the bubble.
+   */
+  discardActive(): UiSnapshot {
+    if (!this.active || this.active.endIso) {
+      return this.snapshot()
+    }
+    const id = this.active.id
+    const startIso = this.active.startIso
+    this.active = null
+    saveRuntime({ activeSession: null })
+    deleteSession(this.config.settings.logDir, id, localDateKey(new Date(startIso)))
+    this.bubbleSession = null
+    this.bubbleFromBacklog = false
+    this.mode = 'idle'
     this.emit()
     return this.snapshot()
   }

@@ -274,6 +274,32 @@ body {
     color-mix(in srgb, #6b7280 55%, transparent);
 }
 
+.wheel-dot.stop .hold-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  background: rgba(220, 80, 70, 0.38);
+  transform: scale(0);
+}
+
+.wheel-dot.stop.is-holding {
+  border-color: rgba(255, 140, 120, 0.95);
+}
+
+.wheel-dot.stop.is-holding .hold-fill {
+  animation: hold-fill-in 700ms linear forwards;
+}
+
+@keyframes hold-fill-in {
+  from {
+    transform: scale(0);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
 .wheel-dot.stop:hover {
   background:
     linear-gradient(
@@ -749,10 +775,14 @@ body {
 
 .analysis-notes {
   flex-shrink: 0;
-  max-height: 110px;
+  height: 110px;
   overflow-y: auto;
   border-top: 1px solid rgba(255, 255, 255, 0.12);
   padding-top: 8px;
+}
+
+.analysis-notes.is-empty {
+  visibility: hidden;
 }
 
 .analysis-notes[hidden] {

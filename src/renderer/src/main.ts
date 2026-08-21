@@ -2,6 +2,7 @@ import './style.css'
 import type {
   DayAnalysis,
   Profile,
+  ProfileSlice,
   ProfileSlot,
   Session,
   UiSnapshot
@@ -42,6 +43,14 @@ let draftProfiles: Profile[] | null = null
 let wheelBuilt = false
 let selectedTimelineId: string | null = null
 let splitAtIso: string | null = null
+let hoveredSliceKey: string | null = null
+let analysisSig = ''
+let analysisRebuildPending = false
+let notesHideTimer: number | null = null
+
+const STOP_HOLD_MS = 700
+let stopHold: number | null = null
+let stopHoldFired = false
 
 function defaultName(slot: ProfileSlot): string {
   return `Profile ${SLOT_DISPLAY[slot]}`
@@ -131,13 +140,15 @@ function applyState(snap: UiSnapshot): void {
   }
 
   if (!modeChanged && snap.mode === 'analysis') {
-    // Refresh only when totals change (avoid hover flicker on 1s ticks)
-    const prevTracked = prev?.analysis?.trackedMs
-    const nextTracked = snap.analysis?.trackedMs
-    const prevN = prev?.todaySessions?.length
-    const nextN = snap.todaySessions?.length
-    if (prevTracked !== nextTracked || prevN !== nextN) {
-      renderAnalysis(snap.analysis)
+    const sig = analysisSignature(snap.analysis)
+    if (sig !== analysisSig) {
+      if (hoveredSliceKey !== null) {
+        analysisRebuildPending = true
+      } else {
+        renderAnalysis(snap.analysis)
+      }
+    } else if (hoveredSliceKey === null) {
+      updateAnalysisLive(snap.analysis)
     }
     return
   }
@@ -179,6 +190,7 @@ function applyState(snap: UiSnapshot): void {
 }
 
 function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
+  cancelStopHold()
   if (nextMode !== 'wheel') {
     fadeOutChrome(wheelEl, () => {
       wheelEl.innerHTML = ''
@@ -204,6 +216,13 @@ function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
     draftProfiles = null
   }
   if (nextMode !== 'analysis') {
+    if (notesHideTimer !== null) {
+      window.clearTimeout(notesHideTimer)
+      notesHideTimer = null
+    }
+    hoveredSliceKey = null
+    analysisSig = ''
+    analysisRebuildPending = false
     analysisEl.hidden = true
     analysisNotes.hidden = true
     analysisBody.innerHTML = ''
@@ -270,7 +289,31 @@ function renderOrb(snap: UiSnapshot): void {
  * Dual-ring wheel. Each ring is startDeg → endDeg at a radius; items pack
  * evenly unless spacingDeg is set. 90 = up from the orb, 180 = left of it.
  */
+function cancelStopHold(): void {
+  if (stopHold !== null) {
+    window.clearTimeout(stopHold)
+    stopHold = null
+  }
+  wheelEl.querySelector('.wheel-dot.stop')?.classList.remove('is-holding')
+}
+
+function beginStopHold(btn: HTMLElement): void {
+  cancelStopHold()
+  btn.classList.add('is-holding')
+  stopHold = window.setTimeout(() => {
+    stopHold = null
+    if (!state?.activeSession || state.activeSession.endIso) {
+      cancelStopHold()
+      return
+    }
+    stopHoldFired = true
+    cancelStopHold()
+    void window.whatwhen.discardActive()
+  }, STOP_HOLD_MS)
+}
+
 function renderWheel(snap: UiSnapshot): void {
+  cancelStopHold()
   wheelEl.hidden = false
   wheelEl.innerHTML = ''
   wheelBuilt = true
@@ -342,8 +385,36 @@ function renderWheel(snap: UiSnapshot): void {
       btn.classList.add('stop')
       btn.dataset.stop = '1'
       num.textContent = '×'
+      const fill = document.createElement('span')
+      fill.className = 'hold-fill'
+      btn.appendChild(fill)
+      btn.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) {
+          cancelStopHold()
+          return
+        }
+        if (!state?.activeSession || state.activeSession.endIso) {
+          cancelStopHold()
+          return
+        }
+        stopHoldFired = false
+        beginStopHold(btn)
+      })
+      btn.addEventListener('pointerup', () => {
+        cancelStopHold()
+      })
+      btn.addEventListener('pointercancel', () => {
+        cancelStopHold()
+      })
+      btn.addEventListener('pointerleave', () => {
+        cancelStopHold()
+      })
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
+        if (stopHoldFired) {
+          stopHoldFired = false
+          return
+        }
         void window.whatwhen.stop()
       })
     } else {
@@ -504,6 +575,79 @@ async function saveSettingsAndClose(): Promise<void> {
 }
 
 // —— Analysis ——
+function sliceKey(slice: ProfileSlice): string {
+  return `${slice.profileSlot}:${slice.profileName}`
+}
+
+function analysisSignature(a: DayAnalysis | null): string {
+  if (!a) return 'none'
+  return a.slices
+    .map((s) => `${s.profileSlot}|${s.profileName}|${s.profileColor}|${s.notes.join('\u241F')}`)
+    .join('||')
+}
+
+function pieArcD(cx: number, cy: number, r: number, startAngle: number, sweep: number): string {
+  const x1 = cx + r * Math.cos(startAngle)
+  const y1 = cy + r * Math.sin(startAngle)
+  const end = startAngle + sweep
+  const x2 = cx + r * Math.cos(end)
+  const y2 = cy + r * Math.sin(end)
+  const large = sweep > Math.PI ? 1 : 0
+  return `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`
+}
+
+function showSliceNotes(slice: ProfileSlice): void {
+  if (notesHideTimer !== null) {
+    window.clearTimeout(notesHideTimer)
+    notesHideTimer = null
+  }
+  analysisNotes.hidden = false
+  analysisNotes.classList.remove('is-empty')
+  analysisNotes.innerHTML = ''
+  const head = document.createElement('div')
+  head.className = 'analysis-notes-title'
+  head.textContent = slice.profileName
+  analysisNotes.appendChild(head)
+  const list = document.createElement('ul')
+  list.className = 'analysis-notes-list'
+  for (const n of slice.notes) {
+    const li = document.createElement('li')
+    li.textContent = n
+    list.appendChild(li)
+  }
+  analysisNotes.appendChild(list)
+}
+
+function hideSliceNotes(): void {
+  if (notesHideTimer !== null) {
+    window.clearTimeout(notesHideTimer)
+  }
+  notesHideTimer = window.setTimeout(() => {
+    notesHideTimer = null
+    hoveredSliceKey = null
+    analysisNotes.classList.add('is-empty')
+    flushDeferredAnalysisRebuild()
+  }, 120)
+}
+
+function flushDeferredAnalysisRebuild(): void {
+  if (!analysisRebuildPending || state?.mode !== 'analysis') {
+    analysisRebuildPending = false
+    return
+  }
+  renderAnalysis(state.analysis)
+}
+
+function bindSliceHover(el: Element, slice: ProfileSlice): void {
+  el.addEventListener('mouseenter', () => {
+    hoveredSliceKey = sliceKey(slice)
+    showSliceNotes(slice)
+  })
+  el.addEventListener('mouseleave', () => {
+    if (hoveredSliceKey === sliceKey(slice)) hideSliceNotes()
+  })
+}
+
 function showAnalysis(analysis: DayAnalysis | null): void {
   analysisEl.hidden = false
   renderAnalysis(analysis)
@@ -511,15 +655,21 @@ function showAnalysis(analysis: DayAnalysis | null): void {
 
 function renderAnalysis(analysis: DayAnalysis | null): void {
   analysisBody.innerHTML = ''
-  analysisNotes.hidden = true
 
   if (!analysis || analysis.slices.length === 0) {
+    analysisNotes.hidden = true
+    analysisNotes.classList.add('is-empty')
     const empty = document.createElement('div')
     empty.className = 'overlay-empty'
     empty.textContent = 'No sessions yet today.'
     analysisBody.appendChild(empty)
+    analysisSig = analysisSignature(analysis)
+    analysisRebuildPending = false
     return
   }
+
+  analysisNotes.hidden = false
+  analysisNotes.classList.add('is-empty')
 
   const summary = document.createElement('div')
   summary.className = 'analysis-summary'
@@ -539,7 +689,7 @@ function renderAnalysis(analysis: DayAnalysis | null): void {
   for (const slice of analysis.slices) {
     const row = document.createElement('div')
     row.className = 'bar-row'
-    row.dataset.slice = slice.profileName
+    row.dataset.sliceKey = sliceKey(slice)
 
     const label = document.createElement('div')
     label.className = 'bar-label'
@@ -563,37 +713,69 @@ function renderAnalysis(analysis: DayAnalysis | null): void {
     pct.textContent = `${slice.percentOfTracked.toFixed(0)}%`
 
     row.append(label, track, pct)
-
-    const showNotes = (): void => {
-      if (slice.notes.length === 0) {
-        analysisNotes.hidden = true
-        return
-      }
-      analysisNotes.hidden = false
-      analysisNotes.innerHTML = ''
-      const head = document.createElement('div')
-      head.className = 'analysis-notes-title'
-      head.textContent = slice.profileName
-      analysisNotes.appendChild(head)
-      const list = document.createElement('ul')
-      list.className = 'analysis-notes-list'
-      for (const n of slice.notes) {
-        const li = document.createElement('li')
-        li.textContent = n
-        list.appendChild(li)
-      }
-      analysisNotes.appendChild(list)
-    }
-    const hideNotes = (): void => {
-      analysisNotes.hidden = true
-    }
-    row.addEventListener('mouseenter', showNotes)
-    row.addEventListener('mouseleave', hideNotes)
-
+    bindSliceHover(row, slice)
     bars.appendChild(row)
   }
   charts.appendChild(bars)
   analysisBody.appendChild(charts)
+
+  const stillHovered = analysis.slices.find((s) => sliceKey(s) === hoveredSliceKey)
+  if (stillHovered) {
+    showSliceNotes(stillHovered)
+  } else {
+    hideSliceNotes()
+  }
+  analysisSig = analysisSignature(analysis)
+  analysisRebuildPending = false
+}
+
+function updateAnalysisLive(analysis: DayAnalysis | null): void {
+  if (!analysis || analysis.slices.length === 0) {
+    renderAnalysis(analysis)
+    return
+  }
+  const rows = [...analysisBody.querySelectorAll<HTMLElement>('.bar-row')]
+  const paths = [...analysisBody.querySelectorAll<SVGPathElement>('.pie-chart path')]
+  if (rows.length !== analysis.slices.length || paths.length !== analysis.slices.length) {
+    renderAnalysis(analysis)
+    return
+  }
+  for (let i = 0; i < analysis.slices.length; i++) {
+    const key = sliceKey(analysis.slices[i])
+    if (rows[i].dataset.sliceKey !== key || paths[i].dataset.sliceKey !== key) {
+      renderAnalysis(analysis)
+      return
+    }
+  }
+
+  const summary = analysisBody.querySelector('.analysis-summary')
+  if (summary) {
+    summary.textContent = `Recorded ${formatDuration(analysis.trackedMs)}`
+  }
+
+  const size = 160
+  const cx = size / 2
+  const cy = size / 2
+  const r = 68
+  let angle = -Math.PI / 2
+  const total = analysis.trackedMs || 1
+
+  for (let i = 0; i < analysis.slices.length; i++) {
+    const slice = analysis.slices[i]
+    const fill = rows[i].querySelector<HTMLElement>('.bar-fill')
+    const pct = rows[i].querySelector('.bar-pct')
+    if (!fill || !pct) {
+      renderAnalysis(analysis)
+      return
+    }
+    fill.style.width = `${Math.max(2, slice.percentOfTracked)}%`
+    pct.textContent = `${slice.percentOfTracked.toFixed(0)}%`
+    const sweep = (slice.durationMs / total) * Math.PI * 2
+    if (sweep > 0) {
+      paths[i].setAttribute('d', pieArcD(cx, cy, r, angle, sweep))
+      angle += sweep
+    }
+  }
 }
 
 function buildPieSvg(analysis: DayAnalysis): SVGSVGElement {
@@ -614,47 +796,15 @@ function buildPieSvg(analysis: DayAnalysis): SVGSVGElement {
     const sweep = (slice.durationMs / total) * Math.PI * 2
     if (sweep <= 0) continue
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-    const x1 = cx + r * Math.cos(angle)
-    const y1 = cy + r * Math.sin(angle)
-    const end = angle + sweep
-    const x2 = cx + r * Math.cos(end)
-    const y2 = cy + r * Math.sin(end)
-    const large = sweep > Math.PI ? 1 : 0
-    path.setAttribute(
-      'd',
-      `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`
-    )
+    path.setAttribute('d', pieArcD(cx, cy, r, angle, sweep))
     path.setAttribute('fill', slice.profileColor)
     path.setAttribute('opacity', '0.88')
     path.setAttribute('stroke', 'rgba(0,0,0,0.25)')
     path.setAttribute('stroke-width', '1')
-
-    path.addEventListener('mouseenter', () => {
-      if (slice.notes.length === 0) {
-        analysisNotes.hidden = true
-        return
-      }
-      analysisNotes.hidden = false
-      analysisNotes.innerHTML = ''
-      const head = document.createElement('div')
-      head.className = 'analysis-notes-title'
-      head.textContent = slice.profileName
-      analysisNotes.appendChild(head)
-      const list = document.createElement('ul')
-      list.className = 'analysis-notes-list'
-      for (const n of slice.notes) {
-        const li = document.createElement('li')
-        li.textContent = n
-        list.appendChild(li)
-      }
-      analysisNotes.appendChild(list)
-    })
-    path.addEventListener('mouseleave', () => {
-      analysisNotes.hidden = true
-    })
-
+    path.dataset.sliceKey = sliceKey(slice)
+    bindSliceHover(path, slice)
     svg.appendChild(path)
-    angle = end
+    angle += sweep
   }
 
   return svg
@@ -921,6 +1071,12 @@ orb.addEventListener('pointerup', reportPointerUp)
 orb.addEventListener('pointercancel', reportPointerUp)
 window.addEventListener('pointerup', reportPointerUp)
 window.addEventListener('blur', reportPointerUp)
+window.addEventListener('pointerup', () => {
+  cancelStopHold()
+})
+window.addEventListener('blur', () => {
+  cancelStopHold()
+})
 
 // —— Events ——
 orb.addEventListener('click', (e) => {

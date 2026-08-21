@@ -598,6 +598,12 @@ function setupIpc(): void {
     return service.snapshot()
   })
 
+  ipcMain.handle('discard-active', () => {
+    service.discardActive()
+    pushState()
+    return service.snapshot()
+  })
+
   ipcMain.handle('toggle-wheel', () => {
     requestToggleWheel()
     return service.snapshot()
@@ -815,12 +821,39 @@ function setupIpc(): void {
           pushState()
         }
       },
+      {
+        label: 'Tips',
+        submenu: [
+          { label: 'Drag the orb to move it', enabled: false },
+          { label: 'Click the orb to open / close the wheel', enabled: false },
+          { label: 'Click a number to start or switch profiles', enabled: false },
+          { label: 'Click × to stop and keep the segment (asks for notes)', enabled: false },
+          { label: 'Hold × for ~0.7 s to stop and discard the segment', enabled: false },
+          { label: 'Badge = pending notes · click it to review', enabled: false },
+          { label: 'In a note: Enter saves · Esc keeps it pending', enabled: false },
+          { label: 'Analysis: hover a slice or bar for its notes', enabled: false },
+          { label: 'Timeline: click a bar to edit times, reassign, or split', enabled: false },
+          {
+            label:
+              'Hotkeys: Ctrl+Shift+Alt+1–7 switch · ` stops · N adds a comment · 0 recovers the orb',
+            enabled: false
+          }
+        ]
+      },
       { type: 'separator' },
       {
         label: 'Stop timer',
         enabled: hasActive,
         click: () => {
           service.stop()
+          pushState()
+        }
+      },
+      {
+        label: 'Stop timer & discard segment',
+        enabled: hasActive,
+        click: () => {
+          service.discardActive()
           pushState()
         }
       },
