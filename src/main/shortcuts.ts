@@ -27,11 +27,19 @@ const COMMENT_ACCELS = [
   'CommandOrControl+Shift+Alt+N'
 ]
 
+/** Recover stuck orb visibility / mouse policy (slot 0 is unused). */
+const RECOVER_ACCELS = [
+  'Control+Shift+Alt+0',
+  'Ctrl+Shift+Alt+0',
+  'CommandOrControl+Shift+Alt+0'
+]
+
 export type ShortcutMap = { slot: ProfileSlot; accel: string }[]
 
 export function registerShortcuts(
   service: SessionService,
-  onAfter: () => void
+  onAfter: () => void,
+  onRecover?: () => void
 ): boolean {
   if (!app.isReady()) {
     console.warn('registerShortcuts called before app ready')
@@ -112,6 +120,27 @@ export function registerShortcuts(
     ok = false
   }
 
+  if (onRecover) {
+    let recoverDone = false
+    for (const accel of RECOVER_ACCELS) {
+      try {
+        const recoverOk = globalShortcut.register(accel, () => {
+          onRecover()
+        })
+        if (recoverOk) {
+          registered.push(accel)
+          recoverDone = true
+          break
+        }
+      } catch (err) {
+        console.warn(`Error registering recover ${accel}`, err)
+      }
+    }
+    if (!recoverDone) {
+      console.warn('Failed to register recover UI shortcut')
+    }
+  }
+
   if (ok) {
     console.log('Global shortcuts registered:', registered.join(', '))
   } else {
@@ -130,10 +159,11 @@ export async function registerShortcutsWithRetry(
   service: SessionService,
   onAfter: () => void,
   attempts = 4,
-  delayMs = 400
+  delayMs = 400,
+  onRecover?: () => void
 ): Promise<boolean> {
   for (let i = 0; i < attempts; i++) {
-    if (registerShortcuts(service, onAfter)) return true
+    if (registerShortcuts(service, onAfter, onRecover)) return true
     if (i < attempts - 1) {
       await new Promise((r) => setTimeout(r, delayMs))
     }

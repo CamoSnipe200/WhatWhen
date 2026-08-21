@@ -16,7 +16,7 @@ import {
   createOrbWindow,
   defaultAnchor,
   loadRenderer,
-  moveWindowBy,
+  setOrbAnchor,
   ORB_SIZE,
   type OrbAnchor
 } from './window'
@@ -47,16 +47,50 @@ let overlayEscapeRegistered = false
 /** Timeline inspector is open and needs keyboard for time fields. */
 let timelineEditing = false
 let lastWheelToggleAt = 0
-let idleLeftDown: { x: number; y: number } | null = null
+let pendingPolicyMode: string | null = null
 
 const WM_LBUTTONDOWN = 0x0201
 const WM_LBUTTONUP = 0x0202
-const IDLE_CLICK_DRAG_PX = 4
+const WM_LBUTTONDBLCLK = 0x0203
+const WM_MOUSEMOVE = 0x0200
+const WM_CAPTURECHANGED = 0x0215
+const WM_ACTIVATEAPP = 0x001c
+const MK_LBUTTON = 0x0001
+
+const IDLE_CLICK_DRAG_PX = 5
+const DRAG_POLL_MS = 16
+const DRAG_MAX_MS = 10_000
+const POST_DRAG_TOGGLE_BLOCK_MS = 300
 const WHEEL_TOGGLE_DEBOUNCE_MS = 400
+
+const DEBUG_INPUT = process.env.WHATWHEN_DEBUG_INPUT === '1'
+const logInput = (...a: unknown[]): void => {
+  if (DEBUG_INPUT) console.log('[orb-input]', ...a)
+}
+
+interface OrbDrag {
+  startCursor: { x: number; y: number }
+  startBounds: Electron.Rectangle
+  moved: boolean
+  startedAt: number
+  poll: ReturnType<typeof setInterval> | null
+  rendererSawPointer: boolean
+}
+let orbDrag: OrbDrag | null = null
+let suppressToggleUntil = 0
 
 function getAnchor(): OrbAnchor {
   const s = service.getConfig().settings
   if (s.orbAnchorX != null && s.orbAnchorY != null) {
+    const { workArea } = screen.getPrimaryDisplay()
+    if (
+      s.orbAnchorX < workArea.x ||
+      s.orbAnchorY < workArea.y ||
+      s.orbAnchorX > workArea.x + workArea.width ||
+      s.orbAnchorY > workArea.y + workArea.height
+    ) {
+      return defaultAnchor(s.marginPx ?? 20)
+    }
     return { x: s.orbAnchorX, y: s.orbAnchorY }
   }
   return defaultAnchor(s.marginPx ?? 20)
@@ -83,16 +117,24 @@ function setOverlayEscape(enabled: boolean): void {
  * Must not call showInactive while the window is hidden — that would undo
  * pushState()'s hide-before-resize guard for Analysis/Timeline transitions.
  */
+function reassertTopmost(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  win.setAlwaysOnTop(true, 'screen-saver')
+}
+
 function clearTransparentFocus(win: BrowserWindow): void {
   if (win.isDestroyed()) return
   win.setFocusable(false)
-  try {
-    win.blur()
-  } catch {
-    /* blur can throw on some Electron/Windows builds */
+  if (win.isFocused()) {
+    try {
+      win.blur()
+    } catch {
+      /* blur can throw on some Electron/Windows builds */
+    }
   }
   win.setHasShadow(false)
   win.setBackgroundColor('#00000000')
+  reassertTopmost(win)
   if (!win.isVisible()) return
   win.showInactive()
 }
@@ -102,6 +144,17 @@ function resetTransparentPaint(win: BrowserWindow): void {
   if (win.isDestroyed()) return
   win.setHasShadow(false)
   win.setBackgroundColor('#00000000')
+}
+
+/** Window must never stay hidden or half-faded. Safe to call at any time. */
+function ensureVisible(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  if (opacityFadeTimer) return // a fade owns the opacity right now
+  const repaired = win.getOpacity() < 1 || !win.isVisible()
+  if (win.getOpacity() < 1) win.setOpacity(1)
+  if (!win.isVisible()) win.showInactive()
+  reassertTopmost(win)
+  if (repaired) logInput('ensureVisible repair')
 }
 
 /** DWM often paints the focus strip a frame after activation. */
@@ -136,6 +189,7 @@ function needsKeyboard(mode: string | null): boolean {
  */
 function applyMousePolicy(mode: string): void {
   if (!orbWindow || orbWindow.isDestroyed()) return
+  pendingPolicyMode = null
 
   if (needsKeyboard(mode)) {
     setOverlayEscape(false)
@@ -143,6 +197,7 @@ function applyMousePolicy(mode: string): void {
     orbWindow.setIgnoreMouseEvents(false)
     if (!orbWindow.isFocused()) orbWindow.focus()
     armTransparentPaintReset(orbWindow)
+    reassertTopmost(orbWindow)
     return
   }
 
@@ -152,6 +207,7 @@ function applyMousePolicy(mode: string): void {
     setOverlayEscape(true)
     orbWindow.setIgnoreMouseEvents(false)
     clearTransparentFocus(orbWindow)
+    reassertTopmost(orbWindow)
     return
   }
 
@@ -160,6 +216,7 @@ function applyMousePolicy(mode: string): void {
     setOverlayEscape(false)
     orbWindow.setIgnoreMouseEvents(false)
     clearTransparentFocus(orbWindow)
+    reassertTopmost(orbWindow)
     return
   }
 
@@ -167,15 +224,20 @@ function applyMousePolicy(mode: string): void {
   setOverlayEscape(false)
   orbWindow.setIgnoreMouseEvents(true, { forward: true })
   clearTransparentFocus(orbWindow)
+  reassertTopmost(orbWindow)
 }
 
 function clearRevealTimers(): void {
+  const wasFading = opacityFadeTimer !== null
   if (boundsRevealTimer) clearTimeout(boundsRevealTimer)
   if (opacityFadeTimer) clearInterval(opacityFadeTimer)
   if (paintResetTimer) clearTimeout(paintResetTimer)
   boundsRevealTimer = null
   opacityFadeTimer = null
   paintResetTimer = null
+  if (wasFading && orbWindow && !orbWindow.isDestroyed()) {
+    orbWindow.setOpacity(1)
+  }
 }
 
 function fadeInWindow(win: BrowserWindow, durationMs = 100, mode?: string): void {
@@ -196,6 +258,7 @@ function fadeInWindow(win: BrowserWindow, durationMs = 100, mode?: string): void
       if (opacityFadeTimer) clearInterval(opacityFadeTimer)
       opacityFadeTimer = null
       win.setOpacity(1)
+      reassertTopmost(win)
       if (keepFocus) {
         applyMousePolicy(snapMode)
         if (!win.isDestroyed()) win.webContents.send('overlay-revealed')
@@ -232,6 +295,16 @@ function isAnchoredMode(mode: string | null): boolean {
 function pushState(): void {
   if (!orbWindow || orbWindow.isDestroyed()) return
   const snap = service.snapshot()
+  if (orbDrag) {
+    if (snap.mode !== 'idle') {
+      endOrbDrag(false)
+    } else {
+      timelineEditing = false
+      orbWindow.webContents.send('state-changed', snap)
+      lastMode = snap.mode
+      return
+    }
+  }
   if (snap.mode !== 'timeline') timelineEditing = false
   const orbSize = service.getConfig().settings.orbSize || ORB_SIZE
   const margin = service.getConfig().settings.marginPx
@@ -270,9 +343,11 @@ function pushState(): void {
 
   if (anchoredShrink) {
     clearRevealTimers()
+    ensureVisible(orbWindow)
     // Pass through empty glass while the large surface is still up.
     orbWindow.setIgnoreMouseEvents(true, { forward: true })
     setOverlayEscape(false)
+    pendingPolicyMode = snap.mode
     orbWindow.webContents.send('state-changed', snap)
     lastMode = snap.mode
     const targetWindow = orbWindow
@@ -338,14 +413,104 @@ function pushState(): void {
 
 function requestToggleWheel(): void {
   const now = Date.now()
+  if (now < suppressToggleUntil) {
+    logInput('toggle suppression')
+    return
+  }
   if (now - lastWheelToggleAt < WHEEL_TOGGLE_DEBOUNCE_MS) return
   lastWheelToggleAt = now
   service.toggleWheel()
   pushState()
 }
 
+function cursorIsOnOrb(): boolean {
+  if (!orbWindow || orbWindow.isDestroyed()) return false
+  const p = screen.getCursorScreenPoint()
+  const b = orbWindow.getBounds()
+  const s = service.getConfig().settings.orbSize || ORB_SIZE
+  const cx = b.x + b.width - 2 - s / 2
+  const cy = b.y + b.height - 2 - s / 2
+  return Math.hypot(p.x - cx, p.y - cy) <= s / 2 + 3
+}
+
+function pollOrbDrag(): void {
+  if (!orbDrag || !orbWindow || orbWindow.isDestroyed()) {
+    endOrbDrag(false)
+    return
+  }
+  if (Date.now() - orbDrag.startedAt > DRAG_MAX_MS) {
+    endOrbDrag(false)
+    return
+  }
+  const p = screen.getCursorScreenPoint()
+  const dx = p.x - orbDrag.startCursor.x
+  const dy = p.y - orbDrag.startCursor.y
+  if (!orbDrag.moved) {
+    if (Math.hypot(dx, dy) < IDLE_CLICK_DRAG_PX) return
+    orbDrag.moved = true
+  }
+  const target: OrbAnchor = {
+    x: orbDrag.startBounds.x + orbDrag.startBounds.width + dx,
+    y: orbDrag.startBounds.y + orbDrag.startBounds.height + dy
+  }
+  const margin = service.getConfig().settings.marginPx
+  setOrbAnchor(orbWindow, target, margin)
+}
+
+function beginOrbDrag(fromRenderer: boolean): void {
+  if (!orbWindow || orbWindow.isDestroyed()) return
+  if (service.snapshot().mode !== 'idle') return
+  if (orbDrag) {
+    orbDrag.rendererSawPointer ||= fromRenderer
+    return
+  }
+  logInput('beginOrbDrag', fromRenderer ? 'renderer' : 'native')
+  orbDrag = {
+    startCursor: screen.getCursorScreenPoint(),
+    startBounds: orbWindow.getBounds(),
+    moved: false,
+    startedAt: Date.now(),
+    poll: setInterval(pollOrbDrag, DRAG_POLL_MS),
+    rendererSawPointer: fromRenderer
+  }
+}
+
+function endOrbDrag(fromRelease: boolean): void {
+  const d = orbDrag
+  if (d?.poll) clearInterval(d.poll)
+  orbDrag = null
+  if (!d) return
+  logInput('endOrbDrag', { moved: d.moved, fromRelease })
+  if (!orbWindow || orbWindow.isDestroyed()) return
+  if (d.moved) {
+    const b = orbWindow.getBounds()
+    const anchor = { x: b.x + b.width, y: b.y + b.height }
+    service.updateSettings({ orbAnchorX: anchor.x, orbAnchorY: anchor.y })
+    suppressToggleUntil = Date.now() + POST_DRAG_TOGGLE_BLOCK_MS
+    logInput('toggle suppression', POST_DRAG_TOGGLE_BLOCK_MS)
+  } else if (fromRelease && !d.rendererSawPointer && cursorIsOnOrb()) {
+    requestToggleWheel()
+  }
+}
+
+function recoverUi(): void {
+  if (!orbWindow || orbWindow.isDestroyed()) return
+  endOrbDrag(false)
+  clearRevealTimers()
+  orbWindow.setOpacity(1)
+  const mode = service.snapshot().mode
+  applyMousePolicy(mode)
+  ensureVisible(orbWindow)
+  pushState()
+}
+
 function createWindow(): void {
-  orbWindow = createOrbWindow()
+  const s = service.getConfig().settings
+  orbWindow = createOrbWindow({
+    orbSize: s.orbSize || ORB_SIZE,
+    margin: s.marginPx,
+    anchor: getAnchor()
+  })
   loadRenderer(orbWindow)
   orbWindow.setIgnoreMouseEvents(false)
   orbWindow.setTitle('')
@@ -394,18 +559,22 @@ function createWindow(): void {
    * are handled here. Debounced with the renderer path to avoid a double
    * toggle once Chromium starts receiving clicks too.
    */
-  orbWindow.hookWindowMessage(WM_LBUTTONDOWN, () => {
-    idleLeftDown = screen.getCursorScreenPoint()
+  const wpNum = (buf: unknown): number => {
+    if (!Buffer.isBuffer(buf)) return 0
+    if (buf.length >= 8) return Number(buf.readBigUInt64LE(0))
+    if (buf.length >= 4) return buf.readUInt32LE(0)
+    return 0
+  }
+
+  orbWindow.hookWindowMessage(WM_LBUTTONDOWN, () => beginOrbDrag(false))
+  orbWindow.hookWindowMessage(WM_LBUTTONDBLCLK, () => beginOrbDrag(false))
+  orbWindow.hookWindowMessage(WM_LBUTTONUP, () => endOrbDrag(true))
+  orbWindow.hookWindowMessage(WM_MOUSEMOVE, (wParam) => {
+    if (!orbDrag) return
+    if ((wpNum(wParam) & MK_LBUTTON) === 0) endOrbDrag(true)
   })
-  orbWindow.hookWindowMessage(WM_LBUTTONUP, () => {
-    const down = idleLeftDown
-    idleLeftDown = null
-    if (!service || !down) return
-    if (service.snapshot().mode !== 'idle') return
-    const up = screen.getCursorScreenPoint()
-    if (Math.hypot(up.x - down.x, up.y - down.y) >= IDLE_CLICK_DRAG_PX) return
-    requestToggleWheel()
-  })
+  orbWindow.hookWindowMessage(WM_CAPTURECHANGED, () => endOrbDrag(false))
+  orbWindow.hookWindowMessage(WM_ACTIVATEAPP, () => endOrbDrag(false))
 }
 
 function setupIpc(): void {
@@ -552,24 +721,9 @@ function setupIpc(): void {
     return service.getConfig()
   })
 
-  ipcMain.handle('drag-orb', (_e, dx: number, dy: number) => {
-    if (!orbWindow || orbWindow.isDestroyed()) return getAnchor()
-    const mode = service.snapshot().mode
-    // Only drag while idle (tight orb window)
-    if (mode !== 'idle') return getAnchor()
-    const margin = service.getConfig().settings.marginPx
-    const next = moveWindowBy(orbWindow, dx, dy, margin)
-    return next
-  })
-
-  ipcMain.handle('end-orb-drag', (_e, anchor: OrbAnchor) => {
-    if (!anchor || typeof anchor.x !== 'number' || typeof anchor.y !== 'number') {
-      return service.getConfig()
-    }
-    service.updateSettings({ orbAnchorX: anchor.x, orbAnchorY: anchor.y })
-    pushState()
-    return service.getConfig()
-  })
+  ipcMain.on('orb-pointer-down', () => beginOrbDrag(true))
+  ipcMain.on('orb-pointer-up', () => endOrbDrag(true))
+  ipcMain.handle('recover-ui', () => recoverUi())
 
   ipcMain.handle('open-today-log', async () => {
     const logDir = service.getConfig().settings.logDir || getDefaultLogDir()
@@ -678,9 +832,13 @@ function setupIpc(): void {
       {
         label: 'Re-register hotkeys',
         click: () => {
-          void registerShortcutsWithRetry(service, () => pushState()).then(() =>
-            pushState()
-          )
+          void registerShortcutsWithRetry(
+            service,
+            () => pushState(),
+            4,
+            400,
+            recoverUi
+          ).then(() => pushState())
         }
       },
       {
@@ -746,13 +904,34 @@ app.whenReady().then(async () => {
   setupIpc()
   createWindow()
 
-  const ok = await registerShortcutsWithRetry(service, () => pushState())
+  const ok = await registerShortcutsWithRetry(
+    service,
+    () => pushState(),
+    4,
+    400,
+    recoverUi
+  )
   if (!ok) {
     console.warn(
       'Some global shortcuts failed. Close other WhatWhen instances or free the hotkeys.'
     )
   }
   pushState()
+
+  setInterval(() => {
+    if (!orbWindow || orbWindow.isDestroyed()) return
+    if (orbDrag) {
+      if (Date.now() - orbDrag.startedAt > DRAG_MAX_MS) endOrbDrag(false)
+      return
+    }
+    if (boundsRevealTimer || opacityFadeTimer) return
+    ensureVisible(orbWindow)
+    if (pendingPolicyMode) {
+      const m = pendingPolicyMode
+      pendingPolicyMode = null
+      applyMousePolicy(m)
+    }
+  }, 2000)
 
   service.onChange(() => {
     // Always apply native bounds/visibility before renderer state. Sending the
@@ -761,11 +940,14 @@ app.whenReady().then(async () => {
     pushState()
   })
 
-  screen.on('display-metrics-changed', () => pushState())
+  screen.on('display-metrics-changed', () => {
+    if (orbWindow && !orbWindow.isDestroyed()) reassertTopmost(orbWindow)
+    pushState()
+  })
 
   app.on('browser-window-focus', () => {
     if (!service.hotkeysOk) {
-      void registerShortcutsWithRetry(service, () => pushState(), 2, 200)
+      void registerShortcutsWithRetry(service, () => pushState(), 2, 200, recoverUi)
     }
   })
 

@@ -106,8 +106,12 @@ export function clampAnchor(
   }
 }
 
-export function createOrbWindow(): BrowserWindow {
-  const { width, height } = computeLayout('idle', 0)
+export function createOrbWindow(
+  initial?: { orbSize: number; margin: number; anchor: OrbAnchor }
+): BrowserWindow {
+  const orbSize = initial?.orbSize ?? ORB_SIZE
+  const margin = initial?.margin ?? MARGIN
+  const { width, height } = computeLayout('idle', 0, orbSize)
   const win = new BrowserWindow({
     width,
     height,
@@ -146,9 +150,10 @@ export function createOrbWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => {
     win.setTitle('')
-    const anchor = defaultAnchor()
-    applyLayout(win, 'idle', 0, ORB_SIZE, MARGIN, anchor)
+    const anchor = initial?.anchor ?? defaultAnchor()
+    applyLayout(win, 'idle', 0, orbSize, margin, anchor)
     win.showInactive()
+    win.setAlwaysOnTop(true, 'screen-saver')
   })
 
   win.on('page-title-updated', (e) => {
@@ -233,6 +238,18 @@ export function applyLayout(
   win.setBackgroundColor('#00000000')
   win.setHasShadow(false)
   win.setTitle('')
+}
+
+/** Absolute move of the idle orb window; returns the clamped anchor. */
+export function setOrbAnchor(
+  win: BrowserWindow,
+  anchor: OrbAnchor,
+  margin = MARGIN
+): OrbAnchor {
+  const b = win.getBounds()
+  const next = clampAnchor(anchor, b.width, b.height, margin)
+  win.setBounds({ x: next.x - b.width, y: next.y - b.height, width: b.width, height: b.height })
+  return next
 }
 
 /** Move idle/orb window keeping size; returns new bottom-right anchor */

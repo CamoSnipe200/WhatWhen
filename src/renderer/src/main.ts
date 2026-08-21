@@ -43,14 +43,6 @@ let wheelBuilt = false
 let selectedTimelineId: string | null = null
 let splitAtIso: string | null = null
 
-/** Orb drag state */
-let dragging = false
-let dragMoved = false
-let dragLastX = 0
-let dragLastY = 0
-let dragAnchor: { x: number; y: number } | null = null
-const DRAG_THRESHOLD = 4
-
 function defaultName(slot: ProfileSlot): string {
   return `Profile ${SLOT_DISPLAY[slot]}`
 }
@@ -904,7 +896,7 @@ function needsPassThrough(): boolean {
 
 function wireHit(el: HTMLElement): void {
   el.addEventListener('mouseenter', () => {
-    if (needsPassThrough()) window.whatwhen.setIgnoreMouse(false)
+    window.whatwhen.setIgnoreMouse(false)
   })
   el.addEventListener('mouseleave', () => {
     if (needsPassThrough()) window.whatwhen.setIgnoreMouse(true)
@@ -918,54 +910,21 @@ wireHit(settingsEl)
 wireHit(analysisEl)
 wireHit(timelineEl)
 
-// —— Orb drag (click-and-hold move) ——
 orb.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return
   if (state?.mode !== 'idle') return
-  dragging = true
-  dragMoved = false
-  dragLastX = e.screenX
-  dragLastY = e.screenY
-  dragAnchor = null
-  orb.setPointerCapture(e.pointerId)
+  if ((e.target as HTMLElement).closest('#orb-badge')) return
+  window.whatwhen.orbPointerDown()
 })
-
-orb.addEventListener('pointermove', (e) => {
-  if (!dragging) return
-  const dx = e.screenX - dragLastX
-  const dy = e.screenY - dragLastY
-  if (!dragMoved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return
-  dragMoved = true
-  dragLastX = e.screenX
-  dragLastY = e.screenY
-  void window.whatwhen.dragOrb(dx, dy).then((anchor) => {
-    dragAnchor = anchor
-  })
-})
-
-function endDrag(e: PointerEvent): void {
-  if (!dragging) return
-  dragging = false
-  try {
-    orb.releasePointerCapture(e.pointerId)
-  } catch {
-    /* already released */
-  }
-  if (dragMoved && dragAnchor) {
-    void window.whatwhen.endOrbDrag(dragAnchor)
-  }
-}
-
-orb.addEventListener('pointerup', endDrag)
-orb.addEventListener('pointercancel', endDrag)
+const reportPointerUp = (): void => window.whatwhen.orbPointerUp()
+orb.addEventListener('pointerup', reportPointerUp)
+orb.addEventListener('pointercancel', reportPointerUp)
+window.addEventListener('pointerup', reportPointerUp)
+window.addEventListener('blur', reportPointerUp)
 
 // —— Events ——
 orb.addEventListener('click', (e) => {
   e.stopPropagation()
-  if (dragMoved) {
-    dragMoved = false
-    return
-  }
   if (state?.mode === 'bubble') {
     void leaveBubbleFromOrb()
     return

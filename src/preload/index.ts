@@ -40,10 +40,9 @@ const api = {
   getConfig: (): Promise<AppConfig> => ipcRenderer.invoke('get-config'),
   setSettings: (partial: Record<string, unknown>): Promise<AppConfig> =>
     ipcRenderer.invoke('set-settings', partial),
-  dragOrb: (dx: number, dy: number): Promise<{ x: number; y: number }> =>
-    ipcRenderer.invoke('drag-orb', dx, dy),
-  endOrbDrag: (anchor: { x: number; y: number }): Promise<AppConfig> =>
-    ipcRenderer.invoke('end-orb-drag', anchor),
+  orbPointerDown: (): void => ipcRenderer.send('orb-pointer-down'),
+  orbPointerUp: (): void => ipcRenderer.send('orb-pointer-up'),
+  recoverUi: (): Promise<void> => ipcRenderer.invoke('recover-ui'),
   openTodayLog: (): Promise<void> => ipcRenderer.invoke('open-today-log'),
   openLogFolder: (): Promise<void> => ipcRenderer.invoke('open-log-folder'),
   showContextMenu: (): Promise<void> => ipcRenderer.invoke('show-context-menu'),
