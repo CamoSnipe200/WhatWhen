@@ -37,7 +37,7 @@ import {
   saveRuntime,
   upsertSession
 } from './store'
-import { getDayMarkdownPath } from './paths'
+import { getDayJsonPath } from './paths'
 
 type Listener = (snap: UiSnapshot) => void
 
@@ -47,6 +47,8 @@ export class SessionService {
   private bubbleSession: Session | null = null
   /** Opened via pending stack / badge — Esc empty dismisses instead of keeping pending */
   private bubbleFromBacklog = false
+  /** Shift-pick while idle: first color is staged until Shift is released or a second color is picked */
+  private armedSlot: ProfileSlot | null = null
   private mode: UiSnapshot['mode'] = 'idle'
   private listeners = new Set<Listener>()
   private tickTimer: ReturnType<typeof setInterval> | null = null
@@ -153,8 +155,8 @@ export class SessionService {
   }
 
   todayLogExists(): boolean {
-    const md = getDayMarkdownPath(this.config.settings.logDir, localDateKey())
-    return existsSync(md)
+    const json = getDayJsonPath(this.config.settings.logDir, localDateKey())
+    return existsSync(json)
   }
 
   snapshot(): UiSnapshot {
@@ -198,7 +200,7 @@ export class SessionService {
     const timelineDateKey = this.timelineKey
     const viewLogExists =
       isValidDateKey(timelineDateKey) &&
-      existsSync(getDayMarkdownPath(logDir, timelineDateKey))
+      existsSync(getDayJsonPath(logDir, timelineDateKey))
 
     return {
       mode: this.mode,
@@ -209,6 +211,7 @@ export class SessionService {
       pending,
       bubbleSession: this.bubbleSession,
       bubbleFromBacklog: this.bubbleFromBacklog,
+      armedSlot: this.armedSlot,
       profiles: this.config.profiles,
       hotkeysOk: this.hotkeysOk,
       todayLogExists: this.todayLogExists(),
@@ -355,6 +358,7 @@ export class SessionService {
    * Closes the radial wheel after selection.
    */
   switchProfile(slot: ProfileSlot): UiSnapshot {
+    this.armedSlot = null
     const profile = this.getProfile(slot)
     const sameStory =
       this.active?.profileSlot === slot &&
@@ -399,32 +403,32 @@ export class SessionService {
   }
 
   /**
-   * Shift-click on the wheel. First color starts and keeps the wheel open.
-   * The first secondary attaches in place (no notes). A later secondary ends
-   * the current segment, asks for notes, then starts the same primary with
-   * that new secondary.
+   * Shift-click on the wheel.
+   * Idle: first color stages on the left and does not start. A second color
+   * starts a dual timer. Running: end the current section, then start a dual.
    */
   shiftPickProfile(slot: ProfileSlot): UiSnapshot {
     const picked = this.getProfile(slot)
     const running = this.active && !this.active.endIso ? this.active : null
 
     if (!running) {
-      this.active = {
-        id: randomUUID(),
-        profileSlot: slot,
-        profileName: picked.name,
-        profileColor: picked.color,
-        profileOutline: picked.outline,
-        profileEpoch: picked.epoch,
-        startIso: new Date().toISOString(),
-        endIso: null,
-        notes: '',
-        notesStatus: 'pending'
+      if (this.armedSlot == null) {
+        this.armedSlot = slot
+        this.mode = 'wheel'
+        this.bubbleSession = null
+        this.bubbleFromBacklog = false
+        this.emit()
+        return this.snapshot()
       }
-      saveRuntime({ activeSession: this.active })
-      upsertSession(this.config.settings.logDir, this.active)
-      this.markLogsDirty()
-      this.mode = 'wheel'
+      if (slot === this.armedSlot) {
+        this.mode = 'wheel'
+        this.emit()
+        return this.snapshot()
+      }
+      const primary = this.getProfile(this.armedSlot)
+      this.armedSlot = null
+      this.startLive(primary, picked)
+      this.mode = 'idle'
       this.bubbleSession = null
       this.bubbleFromBacklog = false
       this.emit()
@@ -437,44 +441,90 @@ export class SessionService {
       return this.snapshot()
     }
 
-    if (!sessionShareOf(running)) {
-      this.active = { ...running, ...shareFieldsFromProfile(picked) }
-      saveRuntime({ activeSession: this.active })
-      upsertSession(this.config.settings.logDir, this.active)
-      this.markLogsDirty()
-      this.mode = 'wheel'
-      this.emit()
-      return this.snapshot()
-    }
-
     const primary = this.getProfile(running.profileSlot)
     const closed = this.endActiveSession()
-    this.active = {
-      id: randomUUID(),
-      profileSlot: primary.slot,
-      profileName: primary.name,
-      profileColor: primary.color,
-      profileOutline: primary.outline,
-      profileEpoch: primary.epoch,
-      startIso: new Date().toISOString(),
-      endIso: null,
-      notes: '',
-      notesStatus: 'pending',
-      ...shareFieldsFromProfile(picked)
-    }
-    saveRuntime({ activeSession: this.active })
-    upsertSession(this.config.settings.logDir, this.active)
-    this.markLogsDirty()
+    this.startLive(primary, picked)
 
     if (closed) {
       this.bubbleSession = closed
       this.bubbleFromBacklog = false
       this.mode = 'bubble'
     } else {
-      this.mode = 'wheel'
+      this.mode = 'idle'
     }
     this.emit()
     return this.snapshot()
+  }
+
+  /** Shift released after a staged first color: start a single timer. */
+  commitArmedSingle(): UiSnapshot {
+    if (this.armedSlot == null) return this.snapshot()
+    const profile = this.getProfile(this.armedSlot)
+    this.armedSlot = null
+    this.startLive(profile, null)
+    this.mode = 'idle'
+    this.bubbleSession = null
+    this.bubbleFromBacklog = false
+    this.emit()
+    return this.snapshot()
+  }
+
+  /**
+   * Drop one half of a live split. Ends the dual, asks for notes, and
+   * continues as a single with the remaining profile.
+   */
+  dropShareHalf(side: 'primary' | 'share'): UiSnapshot {
+    const running = this.active && !this.active.endIso ? this.active : null
+    const share = running ? sessionShareOf(running) : null
+    if (!running || !share) return this.snapshot()
+
+    const keep: Profile =
+      side === 'primary'
+        ? {
+            slot: share.profileSlot,
+            name: share.profileName,
+            color: share.profileColor,
+            outline: share.profileOutline,
+            epoch: share.profileEpoch
+          }
+        : {
+            slot: running.profileSlot,
+            name: running.profileName,
+            color: running.profileColor,
+            outline: running.profileOutline ?? false,
+            epoch: profileEpochOf(running)
+          }
+
+    const closed = this.endActiveSession()
+    this.startLive(keep, null)
+    if (closed) {
+      this.bubbleSession = closed
+      this.bubbleFromBacklog = false
+      this.mode = 'bubble'
+    } else {
+      this.mode = 'idle'
+    }
+    this.emit()
+    return this.snapshot()
+  }
+
+  private startLive(profile: Profile, share: Profile | null): void {
+    this.active = {
+      id: randomUUID(),
+      profileSlot: profile.slot,
+      profileName: profile.name,
+      profileColor: profile.color,
+      profileOutline: profile.outline,
+      profileEpoch: profile.epoch,
+      startIso: new Date().toISOString(),
+      endIso: null,
+      notes: '',
+      notesStatus: 'pending',
+      ...(share ? shareFieldsFromProfile(share) : emptyShareFields())
+    }
+    saveRuntime({ activeSession: this.active })
+    upsertSession(this.config.settings.logDir, this.active)
+    this.markLogsDirty()
   }
 
   /**
@@ -529,6 +579,7 @@ export class SessionService {
   }
 
   stop(): UiSnapshot {
+    this.armedSlot = null
     if (!this.active || this.active.endIso) {
       // Already idle — no-op
       return this.snapshot()
@@ -554,6 +605,7 @@ export class SessionService {
    * Does not end the session, write notes, or prompt the bubble.
    */
   discardActive(): UiSnapshot {
+    this.armedSlot = null
     if (!this.active || this.active.endIso) {
       return this.snapshot()
     }
@@ -595,6 +647,7 @@ export class SessionService {
   }
 
   openWheel(): UiSnapshot {
+    this.armedSlot = null
     this.mode = 'wheel'
     this.bubbleSession = null
     this.bubbleFromBacklog = false
@@ -603,6 +656,7 @@ export class SessionService {
   }
 
   openStack(): UiSnapshot {
+    this.armedSlot = null
     this.mode = 'stack'
     this.bubbleSession = null
     this.bubbleFromBacklog = false
@@ -611,6 +665,7 @@ export class SessionService {
   }
 
   openSettings(): UiSnapshot {
+    this.armedSlot = null
     this.mode = 'settings'
     this.bubbleSession = null
     this.bubbleFromBacklog = false
@@ -619,6 +674,7 @@ export class SessionService {
   }
 
   openAnalysis(): UiSnapshot {
+    this.armedSlot = null
     this.resetViewToToday()
     this.mode = 'analysis'
     this.bubbleSession = null
@@ -628,6 +684,7 @@ export class SessionService {
   }
 
   openTimeline(): UiSnapshot {
+    this.armedSlot = null
     this.resetViewToToday()
     this.mode = 'timeline'
     this.bubbleSession = null
@@ -637,6 +694,7 @@ export class SessionService {
   }
 
   closeUi(): UiSnapshot {
+    this.armedSlot = null
     // Orb/UI close while editing: empty → keep pending; text → save
     if (this.mode === 'bubble' && this.bubbleSession) {
       const notes = this.bubbleSession.notes || ''
@@ -667,6 +725,42 @@ export class SessionService {
 
   saveNotes(sessionId: string, notes: string): UiSnapshot {
     this.persistNotes(sessionId, notes)
+    this.bubbleSession = null
+    this.bubbleFromBacklog = false
+    this.mode = 'idle'
+    this.emit()
+    return this.snapshot()
+  }
+
+  /**
+   * Backspace / explicit skip: close the note and leave the pending queue.
+   * Time stays in the log as skipped.
+   */
+  skipBubbleNotes(): UiSnapshot {
+    if (this.bubbleSession) {
+      this.skipNotes(this.bubbleSession.id)
+    }
+    this.bubbleSession = null
+    this.bubbleFromBacklog = false
+    this.mode = 'idle'
+    this.emit()
+    return this.snapshot()
+  }
+
+  /** Delete key in the note bubble: remove that session from the log. */
+  deleteBubbleSession(): UiSnapshot {
+    if (!this.bubbleSession) {
+      this.mode = 'idle'
+      this.emit()
+      return this.snapshot()
+    }
+    const session = this.bubbleSession
+    deleteSession(
+      this.config.settings.logDir,
+      session.id,
+      localDateKey(new Date(session.startIso))
+    )
+    this.markLogsDirty()
     this.bubbleSession = null
     this.bubbleFromBacklog = false
     this.mode = 'idle'
@@ -732,6 +826,7 @@ export class SessionService {
   }
 
   private findSession(sessionId: string): Session | undefined {
+    if (this.bubbleSession?.id === sessionId) return this.bubbleSession
     const today = localDateKey()
     const fromToday = this.sessionsForDay(today).find((s) => s.id === sessionId)
     if (fromToday) return fromToday
@@ -764,6 +859,7 @@ export class SessionService {
   /** Left-click orb: toggle radial profile wheel */
   toggleWheel(): UiSnapshot {
     if (this.mode === 'wheel') {
+      this.armedSlot = null
       this.mode = 'idle'
       this.emit()
       return this.snapshot()
@@ -978,6 +1074,31 @@ export class SessionService {
     }
     upsertSession(this.config.settings.logDir, second)
     this.markLogsDirty()
+    this.emit()
+    return this.snapshot()
+  }
+
+  /** Remove a recorded (or live) timeline item from the log. */
+  deleteRecordedSession(id: string): UiSnapshot {
+    if (this.active?.id === id && !this.active.endIso) {
+      return this.discardActive()
+    }
+    const current =
+      this.bubbleSession?.id === id
+        ? this.bubbleSession
+        : this.sessionsForDay(this.timelineKey).find((s) => s.id === id)
+    if (!current) return this.snapshot()
+    deleteSession(
+      this.config.settings.logDir,
+      id,
+      localDateKey(new Date(current.startIso))
+    )
+    this.markLogsDirty()
+    if (this.bubbleSession?.id === id) {
+      this.bubbleSession = null
+      this.bubbleFromBacklog = false
+      if (this.mode === 'bubble') this.mode = 'idle'
+    }
     this.emit()
     return this.snapshot()
   }

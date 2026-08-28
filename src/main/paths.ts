@@ -28,11 +28,6 @@ export function getDayJsonPath(logDir: string, dateKey: string): string {
   return join(logDir, `${dateKey}.json`)
 }
 
-export function getDayMarkdownPath(logDir: string, dateKey: string): string {
-  ensureDir(logDir)
-  return join(logDir, `${dateKey}.md`)
-}
-
 function ensureDir(dir: string): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })

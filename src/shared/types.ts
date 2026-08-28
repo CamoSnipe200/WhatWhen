@@ -123,14 +123,16 @@ export interface UiSnapshot {
   bubbleSession: Session | null
   /** True when bubble was opened from the pending backlog (not a fresh switch/stop) */
   bubbleFromBacklog: boolean
+  /** First shift-pick while idle: color is staged, timer has not started */
+  armedSlot: ProfileSlot | null
   profiles: Profile[]
   hotkeysOk: boolean
-  /** Whether today's markdown log file exists */
+  /** Whether today's JSON log file exists */
   todayLogExists: boolean
   view: DateRange
   viewIsToday: boolean
   viewIncludesToday: boolean
-  /** Whether markdown exists for the timeline day */
+  /** Whether JSON exists for the timeline day */
   viewLogExists: boolean
   timelineDateKey: string
   viewSessions: Session[]
@@ -203,10 +205,10 @@ export const SUPERSEDED_PASTEL_COLORS: string[] = [
   '#ABE7E2'
 ]
 
-/** Active profile slots. Hotkeys cover 1–9; 10–12 are wheel-only. */
+/** Active profile slots. F1–F12 cover all twelve; 1–9 stay as number aliases. */
 export const PROFILE_SLOTS: ProfileSlot[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
-export const HOTKEY_SLOTS: ProfileSlot[] = PROFILE_SLOTS.filter((s) => s <= 9)
+export const HOTKEY_SLOTS: ProfileSlot[] = PROFILE_SLOTS
 
 /** Picker palette — unique defaults first, then extras. */
 export const PALETTE: string[] = [
@@ -496,11 +498,12 @@ export function computeDayAnalysis(
           }
         ]
     const partDur = share ? dur / 2 : dur
-    const note = s.notes.trim()
+    const body = s.notes.trim()
       ? s.notes.trim()
       : s.notesStatus === 'pending'
         ? '(pending)'
-        : ''
+        : '(no notes)'
+    const line = `${body} · ${formatDuration(dur)}`
     for (const part of parts) {
       const key = profileSliceKey(part)
       let acc = byKey.get(key)
@@ -517,7 +520,7 @@ export function computeDayAnalysis(
         byKey.set(key, acc)
       }
       acc.durationMs += partDur
-      if (note) acc.notes.push(note)
+      acc.notes.push(line)
     }
   }
 

@@ -3,12 +3,21 @@ import { HOTKEY_SLOTS, type ProfileSlot } from '../shared/types'
 import type { SessionService } from './session-service'
 
 /** Prefer Ctrl (Windows); CommandOrControl as fallback string. */
-function slotAccelerators(slot: ProfileSlot): string[] {
+function numberAccelerators(slot: ProfileSlot): string[] {
   const n = String(slot)
   return [
     `Control+Shift+Alt+${n}`,
     `Ctrl+Shift+Alt+${n}`,
     `CommandOrControl+Shift+Alt+${n}`
+  ]
+}
+
+function fKeyAccelerators(slot: ProfileSlot): string[] {
+  const f = `F${slot}`
+  return [
+    `Control+Shift+Alt+${f}`,
+    `Ctrl+Shift+Alt+${f}`,
+    `CommandOrControl+Shift+Alt+${f}`
   ]
 }
 
@@ -55,24 +64,29 @@ export function registerShortcuts(
   let ok = true
   const registered: string[] = []
 
-  for (const slot of HOTKEY_SLOTS) {
-    let done = false
-    for (const accel of slotAccelerators(slot)) {
+  const tryRegister = (accels: string[], fn: () => void): boolean => {
+    for (const accel of accels) {
       try {
-        const registeredOk = globalShortcut.register(accel, () => {
-          service.switchProfile(slot)
-          onAfter()
-        })
+        const registeredOk = globalShortcut.register(accel, fn)
         if (registeredOk) {
           registered.push(accel)
-          done = true
-          break
+          return true
         }
       } catch (err) {
         console.warn(`Error registering ${accel}`, err)
       }
     }
-    if (!done) {
+    return false
+  }
+
+  for (const slot of HOTKEY_SLOTS) {
+    const run = (): void => {
+      service.switchProfile(slot)
+      onAfter()
+    }
+    const fOk = tryRegister(fKeyAccelerators(slot), run)
+    const nOk = slot <= 9 ? tryRegister(numberAccelerators(slot), run) : true
+    if (!fOk && !nOk) {
       console.warn(`Failed to register any accelerator for profile slot ${slot}`)
       ok = false
     }

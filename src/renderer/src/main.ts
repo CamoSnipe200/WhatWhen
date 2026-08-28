@@ -54,6 +54,9 @@ const liveTimer = document.getElementById('live-timer') as HTMLDivElement
 const analysisEl = document.getElementById('analysis') as HTMLDivElement
 const analysisBody = document.getElementById('analysis-body') as HTMLDivElement
 const analysisNotes = document.getElementById('analysis-notes') as HTMLDivElement
+const wheelTooltip = document.getElementById('wheel-tooltip') as HTMLDivElement
+const orbHalfA = document.getElementById('orb-half-a') as HTMLSpanElement
+const orbHalfB = document.getElementById('orb-half-b') as HTMLSpanElement
 const analysisClose = document.getElementById('analysis-close') as HTMLButtonElement
 const analysisDayPrev = document.getElementById('analysis-day-prev') as HTMLButtonElement
 const analysisDateChip = document.getElementById('analysis-date-chip') as HTMLButtonElement
@@ -92,6 +95,7 @@ let monthCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
 const STOP_HOLD_MS = 700
 let stopHold: number | null = null
 let stopHoldFired = false
+let shiftHeld = false
 
 function defaultName(slot: ProfileSlot): string {
   return `Profile ${SLOT_DISPLAY[slot]}`
@@ -146,7 +150,9 @@ function applyState(snap: UiSnapshot): void {
   const profilesChanged =
     !prev ||
     JSON.stringify(prev.profiles) !== JSON.stringify(snap.profiles) ||
-    prev.activeSession?.profileSlot !== snap.activeSession?.profileSlot
+    prev.activeSession?.profileSlot !== snap.activeSession?.profileSlot ||
+    prev.activeSession?.shareSlot !== snap.activeSession?.shareSlot ||
+    prev.armedSlot !== snap.armedSlot
 
   const viewKey = `${snap.view.startKey}..${snap.view.endKey}`
   const viewChanged = lastViewKey !== viewKey
@@ -249,6 +255,7 @@ function hideAllOverlays(nextMode: UiSnapshot['mode']): void {
   cancelStopHold()
   closeTimePop()
   if (nextMode !== 'wheel') {
+    hideWheelTooltip()
     fadeOutChrome(wheelEl, () => {
       wheelEl.innerHTML = ''
       wheelBuilt = false
@@ -330,8 +337,18 @@ function renderOrb(snap: UiSnapshot): void {
   orb.removeAttribute('title')
   orb.removeAttribute('aria-label')
 
-  if (snap.activeSession && !snap.activeSession.endIso) {
+  const armed = snap.armedSlot
+    ? snap.profiles.find((p) => p.slot === snap.armedSlot)
+    : undefined
+  if (armed) {
+    orb.classList.add('active', 'is-split', 'is-armed')
+    orb.classList.remove('is-outline')
+    orb.style.setProperty('--c', armed.color)
+    orb.style.setProperty('--c2', 'transparent')
+    orbTint.style.background = `linear-gradient(90deg, ${armed.color} 0 50%, transparent 50% 100%)`
+  } else if (snap.activeSession && !snap.activeSession.endIso) {
     orb.classList.add('active')
+    orb.classList.remove('is-armed')
     const share = sessionShareOf(snap.activeSession)
     orb.style.setProperty('--c', snap.activeSession.profileColor)
     if (share) {
@@ -350,9 +367,10 @@ function renderOrb(snap: UiSnapshot): void {
       }
     }
   } else {
-    orb.classList.remove('active', 'is-outline', 'is-split')
+    orb.classList.remove('active', 'is-outline', 'is-split', 'is-armed')
     orbTint.style.background = 'transparent'
   }
+  syncOrbDropTargets()
 
   const n = snap.pending.length
   if (n > 0) {
@@ -465,9 +483,9 @@ function renderWheel(snap: UiSnapshot): void {
       slot: item.profile.slot
     }))
 
-  const activeSlot = snap.activeSession?.endIso
-    ? undefined
-    : snap.activeSession?.profileSlot
+  const activeSlot =
+    snap.armedSlot ??
+    (snap.activeSession?.endIso ? undefined : snap.activeSession?.profileSlot)
 
   items.forEach((item, i) => {
     const btn = document.createElement('button')
@@ -539,8 +557,15 @@ function renderWheel(snap: UiSnapshot): void {
         )
       }
       num.textContent = SLOT_DISPLAY[profile.slot]
+      btn.addEventListener('pointerenter', () => {
+        showWheelTooltip(profile.name, btn)
+      })
+      btn.addEventListener('pointerleave', () => {
+        hideWheelTooltip()
+      })
       btn.addEventListener('click', (e) => {
         e.stopPropagation()
+        hideWheelTooltip()
         if (e.shiftKey) {
           void window.whatwhen.shiftPickProfile(profile.slot as ProfileSlot)
           return
@@ -555,17 +580,22 @@ function renderWheel(snap: UiSnapshot): void {
 }
 
 function updateWheelActive(snap: UiSnapshot): void {
-  const activeSlot = snap.activeSession?.endIso
-    ? undefined
-    : snap.activeSession?.profileSlot
+  const activeSlot =
+    snap.armedSlot ??
+    (snap.activeSession?.endIso ? undefined : snap.activeSession?.profileSlot)
+  const shareSlot =
+    snap.activeSession && !snap.activeSession.endIso
+      ? sessionShareOf(snap.activeSession)?.profileSlot
+      : undefined
   wheelEl.querySelectorAll('.wheel-dot').forEach((el) => {
     const btn = el as HTMLElement
     if (btn.dataset.stop) {
-      btn.classList.remove('active-slot')
+      btn.classList.remove('active-slot', 'share-slot')
       return
     }
     const slot = Number(btn.dataset.slot)
     btn.classList.toggle('active-slot', slot === activeSlot)
+    btn.classList.toggle('share-slot', slot === shareSlot)
   })
 }
 
@@ -639,8 +669,8 @@ function showBubble(session: Session, fromBacklog = false): void {
     : 0
   bubbleRange.textContent = `${start} – ${end} · ${formatDuration(ms)}`
   bubbleHint.textContent = fromBacklog
-    ? 'Enter to save · Esc dismisses'
-    : 'Enter to save · Esc keeps pending if empty'
+    ? 'Enter to save · Esc / Backspace skip · Delete removes'
+    : 'Enter to save · Esc pending · Backspace skip · Delete removes'
   if (isNew) {
     bubbleInput.value = session.notes || ''
     requestAnimationFrame(() => bubbleInput.focus())
@@ -1038,7 +1068,12 @@ function showSliceNotes(slice: ProfileSlice): void {
   analysisNotes.innerHTML = ''
   const head = document.createElement('div')
   head.className = 'analysis-notes-title'
-  head.textContent = slice.profileName
+  const name = document.createElement('span')
+  name.textContent = slice.profileName
+  const dur = document.createElement('span')
+  dur.className = 'analysis-notes-dur'
+  dur.textContent = ` · ${formatDuration(slice.durationMs)}`
+  head.append(name, dur)
   analysisNotes.appendChild(head)
   const list = document.createElement('ul')
   list.className = 'analysis-notes-list'
@@ -1048,6 +1083,24 @@ function showSliceNotes(slice: ProfileSlice): void {
     list.appendChild(li)
   }
   analysisNotes.appendChild(list)
+}
+
+function hideWheelTooltip(): void {
+  if (!wheelTooltip) return
+  wheelTooltip.hidden = true
+  wheelTooltip.textContent = ''
+}
+
+function showWheelTooltip(name: string, btn: HTMLElement): void {
+  if (!wheelTooltip) return
+  const stage = document.getElementById('stage')
+  if (!stage) return
+  wheelTooltip.hidden = false
+  wheelTooltip.textContent = name
+  const sr = stage.getBoundingClientRect()
+  const br = btn.getBoundingClientRect()
+  wheelTooltip.style.left = `${br.left - sr.left + br.width / 2}px`
+  wheelTooltip.style.top = `${br.top - sr.top - 6}px`
 }
 
 function hideSliceNotes(): void {
@@ -1192,7 +1245,7 @@ function renderAnalysis(analysis: RangeAnalysis): void {
 
     const pct = document.createElement('div')
     pct.className = 'bar-pct'
-    pct.textContent = `${slice.percentOfTracked.toFixed(0)}%`
+    pct.textContent = `${slice.percentOfTracked.toFixed(0)}% · ${formatDuration(slice.durationMs)}`
 
     row.append(label, track, pct)
     bindSliceHover(row, slice)
@@ -1257,7 +1310,7 @@ function updateAnalysisLive(analysis: RangeAnalysis): void {
       return
     }
     fill.style.width = `${Math.max(2, slice.percentOfTracked)}%`
-    pct.textContent = `${slice.percentOfTracked.toFixed(0)}%`
+    pct.textContent = `${slice.percentOfTracked.toFixed(0)}% · ${formatDuration(slice.durationMs)}`
     const sweep = (slice.durationMs / total) * Math.PI * 2
     if (sweep > 0) {
       paths[i].setAttribute('d', pieArcD(cx, cy, r, angle, sweep))
@@ -1291,7 +1344,7 @@ function buildPieSvg(analysis: RangeAnalysis): SVGSVGElement {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
     path.setAttribute('d', pieArcD(cx, cy, r, angle, sweep))
     if (isOutlineStyle(slice)) {
-      path.setAttribute('fill', 'none')
+      path.setAttribute('fill', 'transparent')
       path.setAttribute('stroke', slice.profileColor)
       path.setAttribute('stroke-width', '3')
       path.setAttribute('stroke-linejoin', 'round')
@@ -1348,7 +1401,48 @@ function setSelectedTimeline(id: string | null, atIso?: string | null): void {
   if (atIso !== undefined) splitAtIso = atIso
   else if (!id) splitAtIso = null
   timelineEl.classList.toggle('is-inspecting', !!id)
-  void window.whatwhen.setTimelineEditing(!!id)
+  if (!id) void window.whatwhen.setTimelineEditing(false)
+}
+
+function paintTimelineSelection(sessions?: Session[]): void {
+  const list = sessions ?? state?.viewSessions ?? []
+  const now = Date.now()
+  timelineTrack.querySelectorAll<HTMLElement>('.timeline-bubble').forEach((bubble) => {
+    const id = bubble.dataset.sessionId ?? ''
+    const selected = id === selectedTimelineId
+    bubble.classList.toggle('selected', selected)
+    bubble.querySelector('.timeline-split-mark')?.remove()
+    if (!selected || !splitAtIso) return
+    const session = list.find((s) => s.id === id)
+    if (!session) return
+    const start = new Date(session.startIso).getTime()
+    const end = session.endIso ? new Date(session.endIso).getTime() : now
+    const at = new Date(splitAtIso).getTime()
+    if (at <= start || at >= end) return
+    const mark = document.createElement('span')
+    mark.className = 'timeline-split-mark'
+    mark.style.left = `${((at - start) / (end - start)) * 100}%`
+    bubble.appendChild(mark)
+  })
+  const selected = list.find((s) => s.id === selectedTimelineId) ?? null
+  if (selected) {
+    renderTimelineInspector(selected)
+  } else {
+    closeTimePop()
+    timelineInspector.hidden = true
+    timelineInspector.innerHTML = ''
+  }
+}
+
+function timeFieldKeys() {
+  return {
+    onOpen: () => {
+      void window.whatwhen.setTimelineEditing(true)
+    },
+    onClose: () => {
+      void window.whatwhen.setTimelineEditing(false)
+    }
+  }
 }
 
 function renderTimeline(sessions: Session[]): void {
@@ -1448,7 +1542,7 @@ function renderTimeline(sessions: Session[]): void {
       timelineHover.innerHTML = ''
       const h = document.createElement('div')
       h.className = 'timeline-hover-title'
-      h.textContent = `${sessionTitleOf(session)} · ${formatTimeLocal(session.startIso)} – ${endLabel}`
+      h.textContent = `${sessionTitleOf(session)} · ${formatTimeLocal(session.startIso)} – ${endLabel} · ${formatDuration(durationMs)}`
       const body = document.createElement('div')
       body.className = 'timeline-hover-note'
       body.textContent = note
@@ -1468,12 +1562,12 @@ function renderTimeline(sessions: Session[]): void {
         const end = session.endIso ? new Date(session.endIso).getTime() : Date.now()
         const at = new Date(start + t * (end - start)).toISOString()
         setSelectedTimeline(session.id, at)
-        renderTimeline(sessions)
+        paintTimelineSelection(sessions)
         return
       }
       setSelectedTimeline(session.id, sessionMidIso(session))
       timelineHover.hidden = true
-      renderTimeline(sessions)
+      paintTimelineSelection(sessions)
     })
 
     timelineTrack.appendChild(bubble)
@@ -1504,6 +1598,7 @@ function renderTimelineInspector(session: Session): void {
   startWrap.appendChild(
     createTimeField({
       valueHhmm: formatTimeInput(session.startIso),
+      ...timeFieldKeys(),
       onChange: (hhmm) => {
         const nextStart = withTimeOfDay(session.startIso, hhmm)
         void window.whatwhen.updateSessionTimes(session.id, nextStart, session.endIso)
@@ -1518,6 +1613,7 @@ function renderTimelineInspector(session: Session): void {
     createTimeField({
       valueHhmm: formatTimeInput(session.endIso ?? new Date().toISOString()),
       disabled: live,
+      ...timeFieldKeys(),
       onChange: (hhmm) => {
         if (live || !session.endIso) return
         const nextEnd = withTimeOfDay(session.endIso, hhmm)
@@ -1578,9 +1674,22 @@ function renderTimelineInspector(session: Session): void {
   splitWrap.appendChild(
     createTimeField({
       valueHhmm: formatTimeInput(splitValue),
+      ...timeFieldKeys(),
       onChange: (hhmm) => {
         splitAtIso = withTimeOfDay(session.startIso, hhmm)
-        if (state) renderTimeline(state.viewSessions)
+        const bubble = timelineTrack.querySelector<HTMLElement>(
+          `[data-session-id="${session.id}"]`
+        )
+        if (!bubble) return
+        bubble.querySelector('.timeline-split-mark')?.remove()
+        const start = new Date(session.startIso).getTime()
+        const end = session.endIso ? new Date(session.endIso).getTime() : Date.now()
+        const at = new Date(splitAtIso).getTime()
+        if (at <= start || at >= end) return
+        const mark = document.createElement('span')
+        mark.className = 'timeline-split-mark'
+        mark.style.left = `${((at - start) / (end - start)) * 100}%`
+        bubble.appendChild(mark)
       }
     })
   )
@@ -1595,7 +1704,17 @@ function renderTimelineInspector(session: Session): void {
     splitAtIso = null
     void window.whatwhen.splitSession(session.id, at)
   })
-  splitRow.append(splitWrap, splitBtn)
+  const deleteBtn = document.createElement('button')
+  deleteBtn.type = 'button'
+  deleteBtn.className = 'timeline-delete-btn'
+  deleteBtn.textContent = 'Delete'
+  deleteBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    closeTimePop()
+    setSelectedTimeline(null)
+    void window.whatwhen.deleteSession(session.id)
+  })
+  splitRow.append(splitWrap, splitBtn, deleteBtn)
 
   timelineInspector.append(times, chips, shareRow, splitRow)
 }
@@ -1630,6 +1749,7 @@ orb.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return
   if (state?.mode !== 'idle') return
   if ((e.target as HTMLElement).closest('#orb-badge')) return
+  if ((e.target as HTMLElement).closest('.orb-half')) return
   window.whatwhen.orbPointerDown()
 })
 const reportPointerUp = (): void => window.whatwhen.orbPointerUp()
@@ -1647,6 +1767,7 @@ window.addEventListener('blur', () => {
 // —— Events ——
 orb.addEventListener('click', (e) => {
   e.stopPropagation()
+  if ((e.target as HTMLElement).closest('.orb-half')) return
   if (state?.mode === 'bubble') {
     void leaveBubbleFromOrb()
     return
@@ -1764,7 +1885,7 @@ timelineEl.addEventListener('click', (e) => {
   }
   if (selectedTimelineId && state) {
     setSelectedTimeline(null)
-    renderTimeline(state.viewSessions)
+    paintTimelineSelection(state.viewSessions)
   }
 })
 
@@ -1811,6 +1932,16 @@ async function leaveBubbleEscape(): Promise<void> {
   }
 }
 
+async function leaveBubbleSkipping(): Promise<void> {
+  blurBubbleInput()
+  await window.whatwhen.skipBubbleNotes()
+}
+
+async function leaveBubbleDeleting(): Promise<void> {
+  blurBubbleInput()
+  await window.whatwhen.deleteBubbleSession()
+}
+
 bubbleInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
@@ -1819,6 +1950,12 @@ bubbleInput.addEventListener('keydown', (e) => {
     e.preventDefault()
     e.stopPropagation()
     void leaveBubbleEscape()
+  } else if (e.key === 'Backspace' && bubbleInput.value.length === 0) {
+    e.preventDefault()
+    void leaveBubbleSkipping()
+  } else if (e.key === 'Delete' && bubbleInput.value.length === 0) {
+    e.preventDefault()
+    void leaveBubbleDeleting()
   }
 })
 
@@ -1832,7 +1969,68 @@ bubbleInput.addEventListener('blur', () => {
   }, 0)
 })
 
+function setShiftHeld(next: boolean, opts?: { commit?: boolean }): void {
+  if (shiftHeld === next) return
+  shiftHeld = next
+  syncOrbDropTargets()
+  if (!next && opts?.commit !== false && state?.armedSlot != null) {
+    void window.whatwhen.commitArmedSingle()
+  }
+}
+
+function syncOrbDropTargets(): void {
+  const live =
+    state?.activeSession && !state.activeSession.endIso ? state.activeSession : null
+  const share = live ? sessionShareOf(live) : null
+  const show = shiftHeld && !!share
+  orb.classList.toggle('is-dropping', show)
+  orbHalfA.hidden = !show
+  orbHalfB.hidden = !show
+  if (!show) {
+    orbHalfA.classList.remove('is-hot')
+    orbHalfB.classList.remove('is-hot')
+  }
+}
+
+function bindOrbHalf(el: HTMLElement, side: 'primary' | 'share'): void {
+  el.addEventListener('pointerenter', (e) => {
+    if (e.shiftKey) setShiftHeld(true)
+    if (!orb.classList.contains('is-dropping')) return
+    el.classList.add('is-hot')
+  })
+  el.addEventListener('pointerleave', () => {
+    el.classList.remove('is-hot')
+  })
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return
+    if (!e.shiftKey && !shiftHeld) return
+    e.stopPropagation()
+    e.preventDefault()
+    window.whatwhen.suppressOrbToggle()
+    void window.whatwhen.dropShareHalf(side)
+  })
+  el.addEventListener('click', (e) => {
+    e.stopPropagation()
+    e.preventDefault()
+  })
+}
+
+bindOrbHalf(orbHalfA, 'primary')
+bindOrbHalf(orbHalfB, 'share')
+
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Shift') setShiftHeld(true)
+  if (e.key === 'Delete' && state?.mode === 'timeline' && selectedTimelineId) {
+    const t = e.target as HTMLElement | null
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
+      return
+    }
+    e.preventDefault()
+    const id = selectedTimelineId
+    setSelectedTimeline(null)
+    void window.whatwhen.deleteSession(id)
+    return
+  }
   if (e.key !== 'Escape' || !state) return
   if (state.mode === 'bubble') {
     void leaveBubbleEscape()
@@ -1844,13 +2042,25 @@ window.addEventListener('keydown', (e) => {
   ) {
     if (state.mode === 'timeline' && selectedTimelineId) {
       setSelectedTimeline(null)
-      renderTimeline(state.viewSessions)
+      paintTimelineSelection(state.viewSessions)
       return
     }
     void window.whatwhen.closeUi()
   } else if (state.mode === 'settings') {
     void saveSettingsAndClose()
   }
+})
+
+window.addEventListener('keyup', (e) => {
+  if (e.key === 'Shift') setShiftHeld(false)
+})
+
+window.addEventListener('pointermove', (e) => {
+  if (e.shiftKey !== shiftHeld) setShiftHeld(e.shiftKey)
+})
+
+window.addEventListener('blur', () => {
+  setShiftHeld(false, { commit: false })
 })
 
 async function boot(): Promise<void> {

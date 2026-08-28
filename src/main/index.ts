@@ -4,6 +4,7 @@ import {
   globalShortcut,
   ipcMain,
   Menu,
+  powerMonitor,
   shell,
   screen
 } from 'electron'
@@ -20,7 +21,7 @@ import {
   ORB_SIZE,
   type OrbAnchor
 } from './window'
-import { getDayMarkdownPath, getDefaultLogDir } from './paths'
+import { getDayJsonPath, getDefaultLogDir } from './paths'
 import {
   isValidDateKey,
   localDateKey,
@@ -490,7 +491,7 @@ function endOrbDrag(fromRelease: boolean): void {
     service.updateSettings({ orbAnchorX: anchor.x, orbAnchorY: anchor.y })
     suppressToggleUntil = Date.now() + POST_DRAG_TOGGLE_BLOCK_MS
     logInput('toggle suppression', POST_DRAG_TOGGLE_BLOCK_MS)
-  } else if (fromRelease && !d.rendererSawPointer && cursorIsOnOrb()) {
+  } else if (fromRelease && cursorIsOnOrb()) {
     requestToggleWheel()
   }
 }
@@ -595,6 +596,19 @@ function setupIpc(): void {
     return service.snapshot()
   })
 
+  ipcMain.handle('commit-armed-single', () => {
+    service.commitArmedSingle()
+    pushState()
+    return service.snapshot()
+  })
+
+  ipcMain.handle('drop-share-half', (_e, side: 'primary' | 'share') => {
+    if (side !== 'primary' && side !== 'share') return service.snapshot()
+    service.dropShareHalf(side)
+    pushState()
+    return service.snapshot()
+  })
+
   ipcMain.handle('insert-segment', () => {
     service.insertSegment()
     pushState()
@@ -672,6 +686,18 @@ function setupIpc(): void {
     return service.snapshot()
   })
 
+  ipcMain.handle('skip-bubble-notes', () => {
+    service.skipBubbleNotes()
+    pushState()
+    return service.snapshot()
+  })
+
+  ipcMain.handle('delete-bubble-session', () => {
+    service.deleteBubbleSession()
+    pushState()
+    return service.snapshot()
+  })
+
   ipcMain.handle('dismiss-bubble', (_e, notes: string) => {
     service.dismissBubbleWithNotes(notes ?? '')
     pushState()
@@ -735,14 +761,24 @@ function setupIpc(): void {
     return service.snapshot()
   })
 
+  ipcMain.handle('delete-session', (_e, id: string) => {
+    if (typeof id !== 'string' || !id) return service.snapshot()
+    service.deleteRecordedSession(id)
+    pushState()
+    return service.snapshot()
+  })
+
   ipcMain.handle('set-timeline-editing', (_e, editing: boolean) => {
-    timelineEditing = !!editing
-    const mode = service.snapshot().mode
-    if (mode === 'timeline') {
-      applyMousePolicy(mode)
-      if (timelineEditing && orbWindow && !orbWindow.isDestroyed()) {
-        armTransparentPaintReset(orbWindow)
-      }
+    const next = !!editing
+    if (timelineEditing === next) return
+    timelineEditing = next
+    if (!orbWindow || orbWindow.isDestroyed()) return
+    if (service.snapshot().mode !== 'timeline') return
+    setOverlayEscape(!timelineEditing)
+    if (timelineEditing) {
+      orbWindow.setFocusable(true)
+    } else {
+      clearTransparentFocus(orbWindow)
     }
   })
 
@@ -759,6 +795,10 @@ function setupIpc(): void {
 
   ipcMain.on('orb-pointer-down', () => beginOrbDrag(true))
   ipcMain.on('orb-pointer-up', () => endOrbDrag(true))
+  ipcMain.on('suppress-orb-toggle', () => {
+    endOrbDrag(false)
+    suppressToggleUntil = Date.now() + 500
+  })
   ipcMain.handle('recover-ui', () => recoverUi())
 
   ipcMain.handle('set-view-range', (_e, start: string, end: string) => {
@@ -786,16 +826,16 @@ function setupIpc(): void {
   ipcMain.handle('open-day-log', async (_e, dateKey: string) => {
     if (!isValidDateKey(dateKey)) return
     const logDir = service.getConfig().settings.logDir || getDefaultLogDir()
-    const md = getDayMarkdownPath(logDir, dateKey)
-    if (!existsSync(md)) return
-    await shell.openPath(md)
+    const json = getDayJsonPath(logDir, dateKey)
+    if (!existsSync(json)) return
+    await shell.openPath(json)
   })
 
   ipcMain.handle('open-today-log', async () => {
     const logDir = service.getConfig().settings.logDir || getDefaultLogDir()
-    const md = getDayMarkdownPath(logDir, localDateKey())
-    if (!existsSync(md)) return
-    await shell.openPath(md)
+    const json = getDayJsonPath(logDir, localDateKey())
+    if (!existsSync(json)) return
+    await shell.openPath(json)
   })
 
   ipcMain.handle('open-log-folder', async () => {
@@ -829,8 +869,8 @@ function setupIpc(): void {
         enabled: logExists,
         click: () => {
           const logDir = service.getConfig().settings.logDir || getDefaultLogDir()
-          const md = getDayMarkdownPath(logDir, localDateKey())
-          if (existsSync(md)) shell.openPath(md)
+          const json = getDayJsonPath(logDir, localDateKey())
+          if (existsSync(json)) shell.openPath(json)
         }
       },
       {
@@ -887,19 +927,19 @@ function setupIpc(): void {
           { label: 'Drag the orb to move it', enabled: false },
           { label: 'Click the orb to open / close the wheel', enabled: false },
           { label: 'Click a number to start or switch profiles', enabled: false },
-          { label: 'Slots 10–12 sit on the outer ring (no hotkey)', enabled: false },
           { label: 'Click × to stop and keep the segment (asks for notes)', enabled: false },
           { label: 'Hold × for ~0.7 s to stop and discard the segment', enabled: false },
           { label: 'Badge = pending notes · click it to review', enabled: false },
-          { label: 'In a note: Enter saves · Esc keeps it pending', enabled: false },
+          { label: 'In a note: Enter saves · Esc pending · Backspace skips · Delete removes', enabled: false },
           { label: 'Analysis: hover a slice or bar for its notes · click to keep them open', enabled: false },
-          { label: 'Shift-click a color to start and keep the wheel open', enabled: false },
-          { label: 'Shift-click a second color to split the running segment 50/50', enabled: false },
-          { label: 'Shift-click a third color to end that split, note it, and start a new 50/50', enabled: false },
-          { label: 'Timeline: click a bar to edit times, reassign, half-with, or split', enabled: false },
+          { label: 'Hold Shift, then click a color to stage a split without starting yet', enabled: false },
+          { label: 'Release Shift to start a single · click a second color to start a dual', enabled: false },
+          { label: 'Hold Shift on a running timer and pick a color to end that section and start a dual', enabled: false },
+          { label: 'Hold Shift and click × on one orb half to drop it and continue as a single', enabled: false },
+          { label: 'Timeline: click a bar to edit times, reassign, half-with, split, or delete', enabled: false },
           {
             label:
-              'Hotkeys: Ctrl+Shift+Alt+1–9 switch · ` stops · N adds a comment · 0 recovers the orb',
+              'Hotkeys: Ctrl+Shift+Alt+F1–F12 (and 1–9) switch · ` stops · N adds a comment · 0 recovers the orb',
             enabled: false
           }
         ]
@@ -1051,6 +1091,9 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+
+  powerMonitor.on('unlock-screen', () => recoverUi())
+  powerMonitor.on('resume', () => recoverUi())
 })
 
 app.on('will-quit', () => {

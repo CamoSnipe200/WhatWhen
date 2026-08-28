@@ -152,6 +152,73 @@ body {
   opacity: 0.62;
 }
 
+.orb.is-armed .orb-tint {
+  opacity: 0.5;
+}
+
+.orb-half {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.orb-half[hidden] {
+  display: none !important;
+}
+
+.orb.is-dropping {
+  overflow: hidden;
+}
+
+.orb.is-dropping:hover .orb-glass,
+.orb.is-dropping:active .orb-glass {
+  border-color: var(--glass-border);
+}
+
+.orb.is-dropping .orb-half {
+  pointer-events: auto;
+}
+
+.orb-half.is-hot {
+  box-shadow: inset 0 0 0 2.5px rgba(255, 255, 255, 0.92);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+#orb-half-a {
+  left: 0;
+  border-radius: 50% 0 0 50%;
+}
+
+#orb-half-b {
+  right: 0;
+  border-radius: 0 50% 50% 0;
+}
+
+.orb-half-x {
+  display: none;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(10, 12, 16, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.orb-half.is-hot .orb-half-x {
+  display: flex;
+}
+
 .orb-ring {
   position: absolute;
   inset: 0;
@@ -218,6 +285,25 @@ body {
 
 .wheel.is-leaving .wheel-dot {
   animation: wheel-out 0.12s ease forwards;
+}
+
+.wheel-tooltip {
+  position: absolute;
+  z-index: 40;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(16, 18, 24, 0.94);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.wheel-tooltip[hidden] {
+  display: none !important;
 }
 
 .wheel-dot {
@@ -973,7 +1059,7 @@ body {
 
 .bar-row {
   display: grid;
-  grid-template-columns: 110px 1fr 40px;
+  grid-template-columns: 110px 1fr 96px;
   gap: 8px;
   align-items: center;
   cursor: pointer;
@@ -1032,10 +1118,11 @@ body {
 }
 
 .bar-pct {
-  font-size: 11px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   text-align: right;
+  white-space: nowrap;
 }
 
 .analysis-notes {
@@ -1058,6 +1145,11 @@ body {
   font-size: 11px;
   font-weight: 650;
   margin-bottom: 4px;
+}
+
+.analysis-notes-dur {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .analysis-notes-list {
@@ -1363,7 +1455,23 @@ body {
 
 .timeline-split-btn {
   margin-left: auto;
+}
+
+.timeline-delete-btn {
   margin-right: 56px;
+  border: 1px solid rgba(255, 120, 120, 0.35);
+  border-radius: 8px;
+  background: rgba(180, 40, 40, 0.22);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.timeline-delete-btn:hover {
+  background: rgba(180, 40, 40, 0.38);
 }
 
 .overlay-nav {

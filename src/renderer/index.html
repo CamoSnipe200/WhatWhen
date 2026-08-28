@@ -13,6 +13,7 @@
     <div id="app">
       <div id="stage">
         <div id="wheel" class="wheel" hidden></div>
+        <div id="wheel-tooltip" class="wheel-tooltip" hidden></div>
         <div id="stack" class="stack" hidden></div>
 
         <div id="bubble" class="bubble" hidden>
@@ -107,6 +108,12 @@
           <span class="orb-ring"></span>
           <!-- Live elapsed — white digits in the orb only while the wheel is open -->
           <span id="live-timer" class="live-timer" aria-hidden="true"></span>
+          <span class="orb-half" id="orb-half-a" hidden>
+            <span class="orb-half-x">×</span>
+          </span>
+          <span class="orb-half" id="orb-half-b" hidden>
+            <span class="orb-half-x">×</span>
+          </span>
           <span class="orb-badge" id="orb-badge" hidden></span>
         </button>
       </div>

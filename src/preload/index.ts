@@ -7,6 +7,9 @@ const api = {
     ipcRenderer.invoke('switch-profile', slot),
   shiftPickProfile: (slot: ProfileSlot): Promise<UiSnapshot> =>
     ipcRenderer.invoke('shift-pick-profile', slot),
+  commitArmedSingle: (): Promise<UiSnapshot> => ipcRenderer.invoke('commit-armed-single'),
+  dropShareHalf: (side: 'primary' | 'share'): Promise<UiSnapshot> =>
+    ipcRenderer.invoke('drop-share-half', side),
   insertSegment: (): Promise<UiSnapshot> => ipcRenderer.invoke('insert-segment'),
   stop: (): Promise<UiSnapshot> => ipcRenderer.invoke('stop'),
   discardActive: (): Promise<UiSnapshot> => ipcRenderer.invoke('discard-active'),
@@ -22,6 +25,9 @@ const api = {
     ipcRenderer.invoke('save-notes', sessionId, notes),
   bubbleEscape: (notes?: string): Promise<UiSnapshot> =>
     ipcRenderer.invoke('bubble-escape', notes),
+  skipBubbleNotes: (): Promise<UiSnapshot> => ipcRenderer.invoke('skip-bubble-notes'),
+  deleteBubbleSession: (): Promise<UiSnapshot> =>
+    ipcRenderer.invoke('delete-bubble-session'),
   dismissBubble: (notes: string): Promise<UiSnapshot> =>
     ipcRenderer.invoke('dismiss-bubble', notes),
   stackEscape: (): Promise<UiSnapshot> => ipcRenderer.invoke('stack-escape'),
@@ -46,6 +52,8 @@ const api = {
     ipcRenderer.invoke('share-session', id, slot),
   splitSession: (id: string, atIso: string): Promise<UiSnapshot> =>
     ipcRenderer.invoke('split-session', id, atIso),
+  deleteSession: (id: string): Promise<UiSnapshot> =>
+    ipcRenderer.invoke('delete-session', id),
   setTimelineEditing: (editing: boolean): Promise<void> =>
     ipcRenderer.invoke('set-timeline-editing', editing),
   getConfig: (): Promise<AppConfig> => ipcRenderer.invoke('get-config'),
@@ -53,6 +61,7 @@ const api = {
     ipcRenderer.invoke('set-settings', partial),
   orbPointerDown: (): void => ipcRenderer.send('orb-pointer-down'),
   orbPointerUp: (): void => ipcRenderer.send('orb-pointer-up'),
+  suppressOrbToggle: (): void => ipcRenderer.send('suppress-orb-toggle'),
   recoverUi: (): Promise<void> => ipcRenderer.invoke('recover-ui'),
   setViewRange: (start: string, end: string): Promise<UiSnapshot> =>
     ipcRenderer.invoke('set-view-range', start, end),

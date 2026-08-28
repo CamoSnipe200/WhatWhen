@@ -21,7 +21,7 @@ const MONTH_LONG = [
   'December'
 ]
 
-const DOW = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
+const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
 
 export function describeView(view: DateRange, todayKey: string): string {
   if (view.startKey === view.endKey) {
@@ -198,18 +198,14 @@ export function last7Range(todayKey = localDateKey()): DateRange {
 
 export function thisWeekRange(todayKey = localDateKey()): DateRange {
   const today = parseDateKey(todayKey) ?? new Date()
-  const dow = today.getDay()
-  const delta = dow === 0 ? -6 : 1 - dow
-  const monday = new Date(today)
-  monday.setDate(today.getDate() + delta)
-  return { startKey: localDateKey(monday), endKey: todayKey }
+  const sunday = new Date(today)
+  sunday.setDate(today.getDate() - today.getDay())
+  return { startKey: localDateKey(sunday), endKey: todayKey }
 }
 
 function startOfCalendarGrid(year: number, month: number): Date {
   const first = new Date(year, month, 1)
-  const dow = first.getDay()
-  const mondayOffset = dow === 0 ? -6 : 1 - dow
   const start = new Date(first)
-  start.setDate(first.getDate() + mondayOffset)
+  start.setDate(first.getDate() - first.getDay())
   return start
 }

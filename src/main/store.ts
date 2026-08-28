@@ -5,23 +5,17 @@ import {
   DayLog,
   Profile,
   Session,
-  computeDayAnalysis,
   defaultProfiles,
-  formatDuration,
-  formatTimeLocal,
   isOutlineStyle,
   isValidDateKey,
   localDateKey,
   profileEpochOf,
-  sessionShareOf,
-  sessionTitleOf,
   DEFAULT_COLORS,
   SUPERSEDED_PASTEL_COLORS
 } from '../shared/types'
 import {
   getConfigPath,
   getDayJsonPath,
-  getDayMarkdownPath,
   getDefaultLogDir,
   getRuntimeStatePath
 } from './paths'
@@ -181,7 +175,6 @@ export function saveDayLog(logDir: string, log: DayLog): void {
     )
   }
   writeFileSync(getDayJsonPath(logDir, log.date), JSON.stringify(sorted, null, 2), 'utf-8')
-  writeFileSync(getDayMarkdownPath(logDir, log.date), renderMarkdown(sorted), 'utf-8')
 }
 
 export function upsertSession(logDir: string, session: Session): DayLog {
@@ -281,73 +274,3 @@ export function listPending(logDir: string, dateKey = localDateKey()): Session[]
     .sort((a, b) => new Date(a.startIso).getTime() - new Date(b.startIso).getTime())
 }
 
-function pct(n: number): string {
-  return `${n.toFixed(1)}%`
-}
-
-function renderMarkdown(log: DayLog): string {
-  const lines: string[] = [`# WhatWhen — ${log.date}`, '', '## Sessions', '']
-
-  if (log.sessions.length === 0) {
-    lines.push('_No sessions yet._', '')
-  } else {
-    for (const s of log.sessions) {
-      const start = formatTimeLocal(s.startIso)
-      const end = s.endIso ? formatTimeLocal(s.endIso) : '…'
-      const ms =
-        s.endIso != null
-          ? new Date(s.endIso).getTime() - new Date(s.startIso).getTime()
-          : Date.now() - new Date(s.startIso).getTime()
-      const dur = formatDuration(ms)
-      const title = sessionTitleOf(s)
-      const share = sessionShareOf(s)
-      lines.push(`### ${title} · ${start} – ${end} (${dur})`)
-      lines.push(
-        share
-          ? `- Profiles: ${s.profileName} · ${share.profileName} (half each)`
-          : `- Profile: ${s.profileName}`
-      )
-      if (!s.endIso) {
-        lines.push(`- Notes: *(in progress)*`)
-      } else if (s.notes.trim()) {
-        lines.push(`- Notes: ${s.notes.trim()}`)
-      } else if (s.notesStatus === 'pending') {
-        lines.push(`- Notes: *(pending)*`)
-      } else if (s.notesStatus === 'skipped') {
-        lines.push(`- Notes: *(skipped)*`)
-      } else {
-        lines.push(`- Notes:`)
-      }
-      lines.push('')
-    }
-  }
-
-  const analysis = computeDayAnalysis(log)
-  lines.push('## Analysis', '')
-  lines.push(`- Recorded: ${formatDuration(analysis.trackedMs)}`)
-  lines.push('')
-
-  if (analysis.slices.length === 0) {
-    lines.push('_No tracked time yet._', '')
-  } else {
-    lines.push('| Where | Duration | % of recorded |')
-    lines.push('| --- | --- | --- |')
-    for (const slice of analysis.slices) {
-      lines.push(
-        `| ${slice.profileName} | ${formatDuration(slice.durationMs)} | ${pct(slice.percentOfTracked)} |`
-      )
-    }
-    lines.push('')
-
-    for (const slice of analysis.slices) {
-      if (slice.notes.length === 0) continue
-      lines.push(`### Notes — ${slice.profileName}`, '')
-      for (const note of slice.notes) {
-        lines.push(`- ${note}`)
-      }
-      lines.push('')
-    }
-  }
-
-  return lines.join('\n')
-}

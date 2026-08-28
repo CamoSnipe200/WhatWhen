@@ -71,6 +71,8 @@ export function createTimeField(opts: {
   valueHhmm: string
   disabled?: boolean
   onChange: TimeChange
+  onOpen?: () => void
+  onClose?: () => void
 }): HTMLElement {
   const root = document.createElement('div')
   root.className = 'time-field'
@@ -118,9 +120,11 @@ export function createTimeField(opts: {
     closeTimePop()
     pop.hidden = false
     openPop = pop
+    opts.onOpen?.()
     onDismiss = () => {
       const next = formatHhmm(h, m)
       if (next !== formatHhmm(initial.h, initial.m)) opts.onChange(next)
+      opts.onClose?.()
     }
     scrollSelected(hourCol)
     scrollSelected(minCol)
